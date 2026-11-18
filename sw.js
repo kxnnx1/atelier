@@ -1,5 +1,5 @@
 // 앱 파일을 수정해서 다시 올릴 때는 이 숫자를 올려 주세요.
-const VERSION = 'atelier-v1.0.0';
+const VERSION = 'atelier-v1.0.1';
 const FONTS = 'atelier-fonts';
 const SHELL = [
   './',

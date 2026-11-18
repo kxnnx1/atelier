@@ -5,7 +5,7 @@ import { makeImages } from './thumb.js';
 import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -807,8 +807,7 @@ function artistPane(s, rerender) {
         h('button', { class: 'ar-thumb', type: 'button', tabindex: a ? null : -1, onclick: a ? () => openArtist(a.id) : null, 'aria-label': a ? `${name} 보기` : null },
           cover ? h('img', { src: urlOf(cover, 'thumb'), alt: '' }) : h('span', {}, (name[0] || '?').toUpperCase())),
         h('button', { class: 'ar-main', type: 'button', title: '눌러서 복사', onclick: () => copy(formatTag(t), `‘${name}’ 복사했어요`) },
-          h('span', { class: 'ar-name' }, name),
-          h('span', { class: 'ar-raw' }, formatTag(t))),
+          h('span', { class: 'ar-name' }, name)),
         t.weight !== 1 ? h('span', { class: 'ar-weight' + (t.weight < 1 ? ' down' : '') }, `×${t.weight}`) : null,
         a
           ? h('button', { class: 'btn btn-ghost sm', type: 'button', onclick: () => openArtist(a.id) }, '보기')
