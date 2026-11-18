@@ -5,7 +5,7 @@ import { makeImages } from './thumb.js';
 import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -549,7 +549,6 @@ function artistView(a, rerender) {
   return h('div', { class: 'detail' },
     h('div', { class: 'eyebrow' }, 'Artist', a.favorite ? h('span', { class: 'eyebrow-star', html: icon('starFill') }) : null),
     titleRow,
-    h('div', { class: 'raw-tag' }, h('code', {}, a.tag)),
     h('div', { class: 'detail-actions' },
       btn('copy', '태그 복사', () => copy(a.tag, '태그를 복사했어요'), 'btn-primary'),
       favBtn(a, p => saveArtist(a, p))),
@@ -811,7 +810,7 @@ function artistPane(s, rerender) {
         t.weight !== 1 ? h('span', { class: 'ar-weight' + (t.weight < 1 ? ' down' : '') }, `×${t.weight}`) : null,
         a
           ? h('button', { class: 'btn btn-ghost sm', type: 'button', onclick: () => openArtist(a.id) }, '보기')
-          : h('button', { class: 'btn btn-ghost sm', type: 'button', onclick: async () => { await createArtistFromTag(t.text); rerender(); } }, h('span', { class: 'i', html: icon('plus') }), '갤러리에 추가'));
+          : ib('plus', '작가 갤러리에 추가', async () => { await createArtistFromTag(t.text); rerender(); }, 'sm add-art'));
     })));
 }
 

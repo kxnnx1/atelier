@@ -483,6 +483,8 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 14px var(--pad) calc(64p
 .ar-main:hover .ar-name { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ink-4); }
 .ar-weight { flex: none; padding: 2px 9px; border-radius: 999px; background: var(--gold-soft); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--gold-ink); }
 .ar-weight.down { background: var(--surface-2); color: var(--ink-3); }
+.icon-btn.add-art { border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); }
+.icon-btn.add-art:hover { border-color: var(--ink-4); background: var(--surface); color: var(--ink); }
 
 /* settings */
 .lead { margin: 12px 0 0; font-size: 14px; line-height: 1.75; color: var(--ink-2); }
