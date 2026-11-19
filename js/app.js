@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -855,11 +855,12 @@ function styleCard(s, colW) {
   card.append(h('div', { class: 'card-media', style: { aspectRatio: `${s.w} / ${s.h}` } },
     h('img', { src: urlOf(s, 'thumb'), alt: styleTitle(s), loading: 'lazy', decoding: 'async', draggable: 'false' })));
   const arts = artistsOfStyle(s);
-  const sub = [(s.labels || []).join(' · '), arts.length ? `작가 ${arts.length}` : ''].filter(Boolean).join(' · ');
+  // 제목 아래에는 메모를 한 줄로 보여준다
+  const memo = (s.memo || '').replace(/\s+/g, ' ').trim();
   card.append(h('div', { class: 'card-cap' },
     h('div', { class: 'card-meta' },
       h('div', { class: 'card-title' }, styleTitle(s)),
-      h('div', { class: 'card-sub' }, sub || (s.sections?.length ? ' ' : '원본 PNG가 필요해요'))),
+      h('div', { class: 'card-sub', title: s.memo || null }, memo || ' ')),
     arts.length ? ib('copy', '작가 태그 복사', e => { e.stopPropagation(); copy(arts.map(formatTag).join(', '), '작가 태그를 복사했어요'); }, 'sm') : null));
   if (s.favorite) card.append(h('span', { class: 'card-fav', html: icon('starFill') }));
   if (!s.sections?.length) card.append(h('span', { class: 'card-badge' }, '메타데이터 없음'));
