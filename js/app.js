@@ -5,7 +5,7 @@ import { makeImages } from './thumb.js';
 import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -27,6 +27,7 @@ const S = {
   styles: [],
   syncedAt: 0,
   dirtyAt: 0,
+  folderOrder: { artists: [], styles: [], updatedAt: 0 },
 };
 
 const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -352,12 +353,25 @@ function folderList() {
     if (!map.has(l)) map.set(l, []);
     map.get(l).push(it);
   }
-  const list = [...map].map(([name, items]) => ({ name, items })).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  const ord = new Map((S.folderOrder[S.tab] || []).map((n, i) => [n, i]));
+  const rank = n => (ord.has(n) ? ord.get(n) : 1e9);
+  const list = [...map].map(([name, items]) => ({ name, items }))
+    .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name, 'ko'));
   const unfiled = tabItems().filter(it => !it.labels?.length);
   if (unfiled.length && list.length) list.push({ name: UNFILED, items: unfiled });
   return list;
 }
 const currentFolders = () => folderList().map(f => f.name).filter(n => n !== UNFILED);
+
+async function saveFolderOrder(names) {
+  S.folderOrder = { ...S.folderOrder, [S.tab]: names, updatedAt: now() };
+  await db.setMeta('folderOrder', S.folderOrder);
+  markDirty();
+}
+function patchFolderOrder(fn) {
+  const cur = S.folderOrder[S.tab] || [];
+  if (cur.length) saveFolderOrder(fn(cur));
+}
 
 function enterFolder(name) {
   S.label = name;
@@ -390,6 +404,7 @@ async function renameFolder(old) {
   const t = now();
   for (const it of changed) {
     it.labels = [...new Set(it.labels.map(l => (l === old ? name : l)))];
+    patchFolderOrder(list => [...new Set(list.map(l => (l === old ? name : l)))]);
     it.updatedAt = t;
   }
   await db.putMany(S.tab === 'artists' ? 'artists' : 'styles', changed);
@@ -406,6 +421,7 @@ async function deleteFolder(name) {
   if (!await confirmDialog(`‘${name}’ 폴더를 삭제할까요?`, changed.length ? `폴더만 지워지고 안의 항목(${what})은 그대로 남아요.` : '빈 폴더예요.', '폴더 삭제')) return;
   const t = now();
   for (const it of changed) { it.labels = it.labels.filter(l => l !== name); it.updatedAt = t; }
+  patchFolderOrder(list => list.filter(l => l !== name));
   await db.putMany(S.tab === 'artists' ? 'artists' : 'styles', changed);
   markDirty();
   toast('폴더를 삭제했어요');
@@ -426,13 +442,124 @@ function folderThumbs(items) {
 function folderCard(f) {
   const thumbs = folderThumbs(f.items);
   const unit = S.tab === 'artists' ? '명' : '개';
-  return h('button', { class: 'folder-card' + (f.name === UNFILED ? ' unfiled' : ''), type: 'button', onclick: () => enterFolder(f.name) },
+  return h('button', {
+    class: 'folder-card' + (f.name === UNFILED ? ' unfiled' : ''), type: 'button',
+    'data-folder': f.name === UNFILED ? null : f.name,
+    onclick: () => enterFolder(f.name),
+  },
     h('div', { class: 'folder-cover n' + thumbs.length },
-      thumbs.length ? thumbs.map(u => h('img', { src: u, alt: '', loading: 'lazy' })) : h('span', { class: 'folder-empty', html: icon('folder') })),
+      thumbs.length ? thumbs.map(u => h('img', { src: u, alt: '', loading: 'lazy', draggable: 'false' })) : h('span', { class: 'folder-empty', html: icon('folder') })),
     h('div', { class: 'folder-cap' },
       h('span', { class: 'folder-name' }, folderName(f.name)),
       h('span', { class: 'folder-n' }, `${f.items.length}${unit}`)));
 }
+
+// ---------- 폴더 순서 바꾸기 (마우스: 끌기, 터치: 길게 누른 뒤 끌기) ----------
+let fdrag = null;
+let suppressClickUntil = 0;
+const sliding = new Set();
+
+function folderDragStart(e) {
+  const card = e.target.closest('.folder-card[data-folder]');
+  if (!card || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const grid = card.parentElement;
+  fdrag = { card, grid, id: e.pointerId, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, touch: e.pointerType !== 'mouse', active: false, timer: 0, raf: 0 };
+  if (fdrag.touch) fdrag.timer = setTimeout(() => fdrag && activateDrag(), 380);
+  window.addEventListener('pointermove', folderDragMove, { passive: false });
+  window.addEventListener('pointerup', folderDragEnd);
+  window.addEventListener('pointercancel', folderDragEnd);
+}
+
+function activateDrag() {
+  const d = fdrag;
+  const r = d.card.getBoundingClientRect();
+  d.active = true;
+  d.dx = d.x - r.left;
+  d.dy = d.y - r.top;
+  d.ghost = d.card.cloneNode(true);
+  d.ghost.classList.add('folder-ghost');
+  Object.assign(d.ghost.style, { width: r.width + 'px', height: r.height + 'px', left: '0px', top: '0px' });
+  document.body.append(d.ghost);
+  d.card.classList.add('drag-src');
+  document.documentElement.classList.add('folder-dragging');
+  positionGhost();
+  navigator.vibrate?.(12);
+  const tick = () => {
+    if (!fdrag?.active) return;
+    const edge = 70;
+    if (d.y < edge) window.scrollBy(0, -Math.ceil((edge - d.y) / 6));
+    else if (d.y > innerHeight - edge) window.scrollBy(0, Math.ceil((d.y - innerHeight + edge) / 6));
+    d.raf = requestAnimationFrame(tick);
+  };
+  d.raf = requestAnimationFrame(tick);
+}
+
+function positionGhost() {
+  const d = fdrag;
+  d.ghost.style.transform = `translate(${d.x - d.dx}px, ${d.y - d.dy}px) scale(1.04)`;
+}
+
+function folderDragMove(e) {
+  const d = fdrag;
+  if (!d || e.pointerId !== d.id) return;
+  d.x = e.clientX;
+  d.y = e.clientY;
+  const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
+  if (!d.active) {
+    if (d.touch) { if (moved > 10) folderDragEnd(); return; }   // 길게 누르기 전에 움직이면 스크롤로 본다
+    if (moved <= 6) return;
+    activateDrag();
+  }
+  e.preventDefault();
+  positionGhost();
+  const over = document.elementFromPoint(d.x, d.y)?.closest('.folder-card[data-folder]');
+  if (!over || over === d.card || over.parentElement !== d.grid || sliding.has(over)) return;
+  const cards = [...d.grid.querySelectorAll('.folder-card[data-folder]')];
+  const from = cards.indexOf(d.card), to = cards.indexOf(over);
+  const before = new Map(cards.map(c => [c, c.getBoundingClientRect()]));
+  if (from < to) over.after(d.card); else over.before(d.card);
+  // 자리를 옮긴 카드들이 부드럽게 미끄러지도록 (FLIP)
+  for (const c of cards) {
+    const a = before.get(c), b = c.getBoundingClientRect();
+    const tx = a.left - b.left, ty = a.top - b.top;
+    if (!tx && !ty) continue;
+    // 미끄러지는 중인 카드는 원래 자리에 그려져 있으므로, 끝날 때까지 교체 대상으로 보지 않는다
+    sliding.add(c);
+    c.animate([{ transform: `translate(${tx}px, ${ty}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' })
+      .finished.finally(() => sliding.delete(c));
+  }
+}
+
+function folderDragEnd() {
+  const d = fdrag;
+  if (!d) return;
+  fdrag = null;
+  clearTimeout(d.timer);
+  window.removeEventListener('pointermove', folderDragMove);
+  window.removeEventListener('pointerup', folderDragEnd);
+  window.removeEventListener('pointercancel', folderDragEnd);
+  if (!d.active) return;
+  cancelAnimationFrame(d.raf);
+  suppressClickUntil = Date.now() + 500;
+  const r = d.card.getBoundingClientRect();
+  const g = d.ghost;
+  g.style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s';
+  g.style.transform = `translate(${r.left}px, ${r.top}px)`;
+  setTimeout(() => { g.remove(); d.card.classList.remove('drag-src'); }, 230);
+  document.documentElement.classList.remove('folder-dragging');
+  const names = [...d.grid.querySelectorAll('.folder-card[data-folder]')].map(c => c.dataset.folder);
+  const prev = folderList().map(f => f.name).filter(n => n !== UNFILED);
+  if (names.join('\u0000') !== prev.join('\u0000')) saveFolderOrder(names);
+}
+
+// 끌기를 마친 직후의 클릭은 폴더 열기로 처리하지 않는다
+document.addEventListener('click', e => {
+  if (Date.now() < suppressClickUntil && e.target.closest?.('.folder-card')) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+// 끄는 중에는 화면이 같이 스크롤되지 않게 한다 (iOS)
+document.addEventListener('touchmove', e => { if (fdrag?.active) e.preventDefault(); }, { passive: false });
+// 길게 눌렀을 때 뜨는 메뉴 막기
+document.addEventListener('contextmenu', e => { if (e.target.closest?.('.folder-card[data-folder]')) e.preventDefault(); });
 
 function renderFolders() {
   const el = $('#folders');
@@ -448,8 +575,11 @@ function renderFolders() {
   el.hidden = false;
   el.style.setProperty('--fcols', colCount($('#grid').clientWidth || window.innerWidth) + 1);
   el.replaceChildren(
-    h('div', { class: 'block-head' }, h('h2', {}, '폴더'), h('span', { class: 'n' }, list.filter(f => f.name !== UNFILED).length || '')),
-    h('div', { class: 'folder-grid' },
+    h('div', { class: 'block-head' },
+      h('h2', {}, '폴더'),
+      h('span', { class: 'n' }, list.filter(f => f.name !== UNFILED).length || ''),
+      list.filter(f => f.name !== UNFILED).length > 1 ? h('span', { class: 'block-hint' }, isTouch ? '길게 눌러 순서 바꾸기' : '끌어서 순서 바꾸기') : null),
+    h('div', { class: 'folder-grid', onpointerdown: folderDragStart },
       list.map(folderCard),
       h('button', { class: 'folder-card add', type: 'button', onclick: newFolder },
         h('div', { class: 'folder-cover n0' }, h('span', { class: 'folder-empty', html: icon('folderPlus') })),
@@ -1139,7 +1269,7 @@ async function doExport(button) {
   const t = toast('백업 파일을 만드는 중…', { sticky: true });
   try {
     const tombstones = await db.all('tombstones');
-    const blob = await buildBackup({ artists: S.artists, images: S.images, styles: S.styles, tombstones });
+    const blob = await buildBackup({ artists: S.artists, images: S.images, styles: S.styles, tombstones, folderOrder: S.folderOrder });
     t.close();
     const ok = await saveFile(blob, `atelier-backup-${stamp()}.zip`);
     if (ok) {
@@ -1196,9 +1326,14 @@ async function applyBackup(data, mode) {
     await db.clear([...stores, 'tombstones']);
     for (const s of stores) await db.putMany(s, incoming[s]);
     await db.putMany('tombstones', data.tombstones);
+    if (data.folderOrder) await db.setMeta('folderOrder', data.folderOrder);
     return false;
   }
   let localNewer = false;
+  const lo = await db.getMeta('folderOrder', null);
+  const io = data.folderOrder;
+  if (io && (!lo || (io.updatedAt || 0) > (lo.updatedAt || 0))) await db.setMeta('folderOrder', io);
+  else if (lo && (!io || (lo.updatedAt || 0) > (io.updatedAt || 0))) localNewer = true;
   const tombs = new Map((await db.all('tombstones')).map(t => [t.id, t]));
   const inTombIds = new Set(data.tombstones.map(t => t.id));
   for (const t of data.tombstones) {
@@ -1232,6 +1367,7 @@ async function applyBackup(data, mode) {
 async function wipeAll() {
   if (!await confirmDialog('이 기기의 데이터를 모두 지울까요?', '작가, 화풍 이미지, 그림체가 모두 삭제돼요. 백업 파일이 없다면 되돌릴 수 없어요.', '모두 지우기')) return;
   await db.clear(['artists', 'artistImages', 'styles', 'tombstones']);
+  await db.setMeta('folderOrder', { artists: [], styles: [], updatedAt: 0 });
   await reloadState();
   S.syncedAt = S.dirtyAt = 0;
   await db.setMeta('syncedAt', 0);
@@ -1246,6 +1382,7 @@ async function reloadState() {
   [S.artists, S.images, S.styles] = await Promise.all([db.all('artists'), db.all('artistImages'), db.all('styles')]);
   const ids = new Set(S.artists.map(a => a.id));
   S.images = S.images.filter(i => ids.has(i.artistId));
+  S.folderOrder = await db.getMeta('folderOrder', { artists: [], styles: [], updatedAt: 0 });
   gver++;
 }
 
@@ -1330,6 +1467,7 @@ async function init() {
     await reloadState();
     S.syncedAt = await db.getMeta('syncedAt', 0);
     S.dirtyAt = await db.getMeta('dirtyAt', 0);
+    S.folderOrder = await db.getMeta('folderOrder', S.folderOrder);
   } catch (e) {
     console.error(e);
     toast('저장소를 열지 못했어요. 개인정보 보호 모드에서는 저장이 안 될 수 있어요.', { ms: 6000 });

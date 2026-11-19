@@ -7,7 +7,7 @@ const extOf = b => {
 };
 const typeOf = p => p.endsWith('.webp') ? 'image/webp' : p.endsWith('.png') ? 'image/png' : 'image/jpeg';
 
-export async function buildBackup({ artists, images, styles, tombstones }) {
+export async function buildBackup({ artists, images, styles, tombstones, folderOrder }) {
   const entries = [];
   const fileOf = (id, suffix, blob) => {
     if (!blob) return null;
@@ -27,6 +27,7 @@ export async function buildBackup({ artists, images, styles, tombstones }) {
     artistImages: images.map(strip),
     styles: styles.map(strip),
     tombstones,
+    folderOrder,
   };
   entries.unshift({ name: 'data.json', data: JSON.stringify(data) });
   return makeZip(entries);
