@@ -580,6 +580,46 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 14px var(--pad) calc(64p
 .dropzone-box .t { font-family: var(--serif); font-size: 26px; }
 .dropzone-box .s { margin-top: 6px; font-size: 13px; color: var(--ink-3); }
 
+/* ---------- card layouts (설정 → 카드 배열) ---------- */
+.grid.layout-compact { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 14px; }
+.layout-compact .card-media { aspect-ratio: 1 / 1 !important; }
+.layout-compact .card-text { aspect-ratio: 1 / 1; padding: 12px; }
+.layout-compact .card-text .nm { font-size: 15px; }
+.layout-compact .card-text .pre { display: none; }
+.layout-compact .card-cap { padding: 8px 4px 9px 11px; }
+.layout-compact .card-title { font-size: 13px; }
+.layout-compact .card-sub { font-size: 11px; }
+.layout-compact .card-fav { top: 7px; right: 7px; width: 24px; height: 24px; }
+.layout-compact .card-fav svg { width: 12px; height: 12px; }
+.layout-compact .card-badge { top: 7px; left: 7px; font-size: 10px; padding: 2px 7px; }
+
+.grid.layout-title { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.layout-title .card { display: flex; align-items: center; }
+.layout-title .card-media, .layout-title .card-text { display: none; }
+.layout-title .card-cap { flex: 1; min-width: 0; padding: 12px 6px 12px 16px; }
+.layout-title .card-title { font-family: var(--serif); font-size: 15.5px; font-weight: 500; }
+.layout-title .card-fav { position: static; order: -1; flex: none; width: auto; height: auto; margin-left: 14px; margin-right: -8px; background: none; box-shadow: none; }
+.layout-title .card-badge { position: static; order: 2; flex: none; margin-right: 10px; box-shadow: none; background: #F8ECE6; }
+
+/* settings: layout picker */
+.set-section { margin: 34px 0 0; font-family: var(--serif); font-size: 19px; font-weight: 500; }
+.layout-rows { display: flex; flex-direction: column; gap: 10px; }
+.layout-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.layout-name { font-size: 14px; font-weight: 500; }
+.seg.layout-seg { margin-top: 0; }
+.seg.layout-seg button { display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; white-space: nowrap; }
+.layout-ico { display: grid; width: 14px; height: 14px; gap: 1.5px; }
+.layout-ico i { display: block; border-radius: 1.5px; background: currentColor; opacity: .55; }
+.seg button.active .layout-ico i { opacity: .9; }
+.layout-ico.masonry { grid-template-columns: 1fr 1fr; grid-template-rows: 5fr 3fr 3fr 5fr; }
+.layout-ico.masonry i:nth-child(1) { grid-row: 1 / 2; }
+.layout-ico.masonry i:nth-child(2) { grid-row: 1 / 3; }
+.layout-ico.masonry i:nth-child(3) { grid-row: 2 / 5; }
+.layout-ico.masonry i:nth-child(4) { grid-row: 3 / 5; }
+.layout-ico.compact { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.layout-ico.title { grid-template-rows: repeat(4, 1fr); gap: 2px; }
+.layout-ico.title i { height: 2px; align-self: center; }
+
 /* ---------- tag tab ---------- */
 .seg.mode-seg { display: inline-flex; margin-top: 0; flex: none; }
 .seg.mode-seg button { flex: none; white-space: nowrap; }
@@ -811,6 +851,12 @@ body.has-tray .toasts { bottom: calc(126px + var(--safe-b)); }
   .folder-name { font-size: 14px; }
 
   .tgrid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
+  .grid.layout-compact { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
+  .grid.layout-title { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .layout-title .card-cap { padding: 10px 2px 10px 12px; }
+  .layout-title .card-title { font-size: 14px; }
+  .layout-row .seg.layout-seg { display: flex; width: 100%; }
+  .layout-row .seg.layout-seg button { flex: 1; justify-content: center; padding: 0 8px; }
   .tcard-cap { padding: 7px 8px 8px; }
   .tcard-name { font-size: 12.5px; }
   .tcard-add { top: 6px; right: 6px; width: 28px; height: 28px; }

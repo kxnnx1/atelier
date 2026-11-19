@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -23,6 +23,7 @@ const S = {
   fav: false,
   sort: ls.get('sort', { artists: 'new', styles: 'new' }),
   styleView: ls.get('styleView', 'text'),
+  layout: ls.get('layout', { artists: 'masonry', styles: 'masonry' }),
   artists: [],
   images: [],
   styles: [],
@@ -694,9 +695,19 @@ function styleCard(s, colW) {
 }
 
 let lastCols = 0;
+const LAYOUTS = [['masonry', '기본'], ['compact', '작게'], ['title', '제목만']];
+
 function renderGrid() {
   const grid = $('#grid');
   const items = visibleItems();
+  const layout = S.layout[S.tab] || 'masonry';
+  grid.className = 'grid' + (layout === 'masonry' ? '' : ' layout-' + layout);
+  if (layout !== 'masonry') {
+    // 작게: 태그 탭처럼 정사각형 격자 / 제목만: 이미지 없이 이름만
+    grid.replaceChildren(...items.map(it => (S.tab === 'artists' ? artistCard(it, 0) : styleCard(it, 0))[0]));
+    renderEmpty(items.length);
+    return;
+  }
   const width = grid.clientWidth || window.innerWidth;
   const n = colCount(width);
   lastCols = n;
@@ -1215,7 +1226,18 @@ async function settingsView(rerender) {
   const exportBtn = btn('download', '백업 파일 만들기', e => doExport(e.currentTarget).then(rerender), 'btn-primary');
   return h('div', { class: 'detail' },
     h('div', { class: 'eyebrow' }, 'Settings'),
-    h('h2', { class: 'detail-title' }, '백업 · 동기화'),
+    h('h2', { class: 'detail-title' }, '설정'),
+    h('div', { class: 'set-card' },
+      h('h3', {}, '카드 배열'),
+      h('p', {}, '작가와 그림체 목록을 어떻게 보여줄지 골라요. 이 기기에만 적용돼요.'),
+      h('div', { class: 'layout-rows' }, [['artists', '작가'], ['styles', '그림체']].map(([tab, name]) => h('div', { class: 'layout-row' },
+        h('span', { class: 'layout-name' }, name),
+        h('div', { class: 'seg layout-seg', role: 'radiogroup', 'aria-label': `${name} 카드 배열` },
+          LAYOUTS.map(([v, label]) => h('button', {
+            type: 'button', role: 'radio', class: (S.layout[tab] || 'masonry') === v ? 'active' : '', 'aria-checked': (S.layout[tab] || 'masonry') === v,
+            onclick: () => { S.layout = { ...S.layout, [tab]: v }; ls.set('layout', S.layout); renderAll(); rerender(); },
+          }, h('span', { class: 'layout-ico ' + v }, h('i'), h('i'), h('i'), h('i')), label))))))),
+    h('h3', { class: 'set-section' }, '백업 · 동기화'),
     h('p', { class: 'lead' }, '데이터는 이 기기의 브라우저 안에만 저장돼요. 맥에서 백업 파일을 만들어 iCloud Drive에 저장하고, 아이폰에서 그 파일을 불러오면 같은 내용이 돼요.'),
     h('div', { class: 'set-card' },
       h('h3', {}, '내보내기'),
