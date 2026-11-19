@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.5.1';
+const VERSION = '1.6.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -30,6 +30,8 @@ const S = {
   syncedAt: 0,
   dirtyAt: 0,
   folderOrder: { artists: [], styles: [], updatedAt: 0 },
+  itemOrder: { artists: {}, styles: {}, updatedAt: 0 },   // 폴더 안 항목 순서 { 폴더이름: [id, ...] }
+  folderSort: ls.get('folderSort', { artists: 'manual', styles: 'manual' }),
   tagSections: [],
   tagItems: [],
 };
@@ -418,6 +420,7 @@ async function renameFolder(old) {
   for (const it of changed) {
     it.labels = [...new Set(it.labels.map(l => (l === old ? name : l)))];
     patchFolderOrder(list => [...new Set(list.map(l => (l === old ? name : l)))]);
+    patchItemOrder(m => { if (m[old]) { m[name] = [...new Set([...(m[name] || []), ...m[old]])]; delete m[old]; } return m; });
     it.updatedAt = t;
   }
   await db.putMany(S.tab === 'artists' ? 'artists' : 'styles', changed);
@@ -435,6 +438,7 @@ async function deleteFolder(name) {
   const t = now();
   for (const it of changed) { it.labels = it.labels.filter(l => l !== name); it.updatedAt = t; }
   patchFolderOrder(list => list.filter(l => l !== name));
+  patchItemOrder(m => { delete m[name]; return m; });
   await db.putMany(S.tab === 'artists' ? 'artists' : 'styles', changed);
   markDirty();
   toast('폴더를 삭제했어요');
@@ -442,18 +446,37 @@ async function deleteFolder(name) {
   renderAll();
 }
 
-function folderThumbs(items) {
-  const urlsOut = [];
-  for (const it of items) {
+// 폴더 안 '직접 순서': 저장된 순서대로, 순서가 없는 항목은 뒤에 최신순으로
+function manualSort(folder, list) {
+  const ord = S.itemOrder[S.tab]?.[folder] || [];
+  const idx = new Map(ord.map((id, i) => [id, i]));
+  const rank = it => (idx.has(it.id) ? idx.get(it.id) : 1e9);
+  return [...list].sort((a, b) => rank(a) - rank(b) || b.createdAt - a.createdAt);
+}
+
+// 폴더 썸네일 = 폴더 안 첫 번째 항목 (이미지가 없는 작가는 건너뜀)
+function folderThumbs(folder, items) {
+  for (const it of manualSort(folder, items)) {
     const rec = S.tab === 'artists' ? coverOf(it) : it;
-    if (rec) urlsOut.push(urlOf(rec, 'thumb'));
-    if (urlsOut.length === 4) break;
+    if (rec) return [urlOf(rec, 'thumb')];
   }
-  return urlsOut;
+  return [];
+}
+
+async function saveItemOrder(folder, ids) {
+  const tab = S.tab;
+  S.itemOrder = { ...S.itemOrder, [tab]: { ...(S.itemOrder[tab] || {}), [folder]: ids }, updatedAt: now() };
+  await db.setMeta('itemOrder', S.itemOrder);
+  markDirty();
+}
+function patchItemOrder(fn) {
+  const tab = S.tab;
+  S.itemOrder = { ...S.itemOrder, [tab]: fn({ ...(S.itemOrder[tab] || {}) }), updatedAt: now() };
+  db.setMeta('itemOrder', S.itemOrder);
 }
 
 function folderCard(f) {
-  const thumbs = folderThumbs(f.items);
+  const thumbs = folderThumbs(f.name, f.items);
   const unit = S.tab === 'artists' ? '명' : '개';
   return h('button', {
     class: 'folder-card' + (f.name === UNFILED ? ' unfiled' : '') + (f.name === FAVS ? ' favs' : ''), type: 'button',
@@ -569,10 +592,129 @@ function folderDragEnd() {
 
 // 끌기를 마친 직후의 클릭은 폴더 열기로 처리하지 않는다
 document.addEventListener('click', e => {
-  if (Date.now() < suppressClickUntil && e.target.closest?.('.folder-card')) { e.preventDefault(); e.stopPropagation(); }
+  if (Date.now() < suppressClickUntil && e.target.closest?.('.folder-card, #grid .card')) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 // 끄는 중에는 화면이 같이 스크롤되지 않게 한다 (iOS)
-document.addEventListener('touchmove', e => { if (fdrag?.active) e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', e => { if (fdrag?.active || idrag?.active) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', e => { if (S.label && e.target.closest?.('#grid .card')) e.preventDefault(); });
+
+// ---------- 폴더 안 항목 순서 바꾸기 ----------
+let idrag = null;
+const gridCard = id => document.querySelector(`#grid .card[data-id="${CSS.escape(id)}"]`);
+
+function itemDragStart(e) {
+  if (!S.label || S.q.trim() || S.fav || S.tab === 'tags') return;
+  const card = e.target.closest('#grid .card[data-id]');
+  if (!card || e.target.closest('button') || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  idrag = { id: card.dataset.id, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pid: e.pointerId, touch: e.pointerType !== 'mouse', active: false, timer: 0, lock: 0, raf: 0 };
+  if (idrag.touch) idrag.timer = setTimeout(() => idrag && itemActivate(), 380);
+  window.addEventListener('pointermove', itemDragMove, { passive: false });
+  window.addEventListener('pointerup', itemDragEnd);
+  window.addEventListener('pointercancel', itemDragEnd);
+}
+
+function itemActivate() {
+  const d = idrag;
+  // 다른 정렬로 보고 있었다면 지금 보이는 순서를 그대로 '직접 순서'로 삼는다
+  d.order = visibleItems().map(it => it.id);
+  S.itemOrder = { ...S.itemOrder, [S.tab]: { ...(S.itemOrder[S.tab] || {}), [S.label]: d.order } };
+  if ((S.folderSort[S.tab] || 'manual') !== 'manual') {
+    S.folderSort = { ...S.folderSort, [S.tab]: 'manual' };
+    ls.set('folderSort', S.folderSort);
+    renderFilters();
+    renderGrid();
+  }
+  const card = gridCard(d.id);
+  if (!card) { idrag = null; return; }
+  const r = card.getBoundingClientRect();
+  d.active = true;
+  d.dx = d.x - r.left;
+  d.dy = d.y - r.top;
+  d.ghost = card.cloneNode(true);
+  d.ghost.classList.add('card-ghost');
+  Object.assign(d.ghost.style, { width: r.width + 'px', height: r.height + 'px' });
+  // 격자의 배열 클래스(작게/제목만)를 그대로 받도록 감싸서 붙인다
+  d.ghostWrap = h('div', { class: $('#grid').className + ' ghost-wrap' }, d.ghost);
+  document.body.append(d.ghostWrap);
+  card.classList.add('drag-src');
+  document.documentElement.classList.add('folder-dragging');
+  placeItemGhost();
+  const tick = () => {
+    if (!idrag?.active) return;
+    const edge = 70;
+    if (d.y < edge) window.scrollBy(0, -Math.ceil((edge - d.y) / 6));
+    else if (d.y > innerHeight - edge) window.scrollBy(0, Math.ceil((d.y - innerHeight + edge) / 6));
+    d.raf = requestAnimationFrame(tick);
+  };
+  d.raf = requestAnimationFrame(tick);
+}
+
+function placeItemGhost() {
+  const d = idrag;
+  d.ghost.style.transform = `translate(${d.x - d.dx}px, ${d.y - d.dy}px) scale(1.03)`;
+}
+
+function itemDragMove(e) {
+  const d = idrag;
+  if (!d || e.pointerId !== d.pid) return;
+  d.x = e.clientX;
+  d.y = e.clientY;
+  if (!d.active) {
+    const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
+    if (d.touch) { if (moved > 10) itemDragEnd(); return; }
+    if (moved <= 6) return;
+    itemActivate();
+    if (!idrag?.active) return;
+  }
+  e.preventDefault();
+  placeItemGhost();
+  if (Date.now() < d.lock) return;
+  // 크기가 다른 카드끼리 바뀐 직후 포인터 아래에 다른 카드가 와서 되돌아가는 것을 막는다
+  if (d.sx != null && Math.hypot(d.x - d.sx, d.y - d.sy) < 28) return;
+  const over = document.elementFromPoint(d.x, d.y)?.closest('#grid .card[data-id]');
+  if (!over || over.dataset.id === d.id) return;
+  const from = d.order.indexOf(d.id), to = d.order.indexOf(over.dataset.id);
+  if (from < 0 || to < 0) return;
+  d.order.splice(from, 1);
+  d.order.splice(to, 0, d.id);
+  S.itemOrder[S.tab][S.label] = d.order;
+  // 다시 배치하고, 자리를 옮긴 카드들이 미끄러지게 (FLIP)
+  const before = new Map([...document.querySelectorAll('#grid .card[data-id]')].map(c => [c.dataset.id, c.getBoundingClientRect()]));
+  renderGrid();
+  for (const c of document.querySelectorAll('#grid .card[data-id]')) {
+    if (c.dataset.id === d.id) { c.classList.add('drag-src'); continue; }
+    const a = before.get(c.dataset.id), b = c.getBoundingClientRect();
+    if (!a) continue;
+    const tx = a.left - b.left, ty = a.top - b.top;
+    if (tx || ty) c.animate([{ transform: `translate(${tx}px, ${ty}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  }
+  d.lock = Date.now() + 230;
+  d.sx = d.x;
+  d.sy = d.y;
+}
+
+function itemDragEnd() {
+  const d = idrag;
+  if (!d) return;
+  idrag = null;
+  clearTimeout(d.timer);
+  window.removeEventListener('pointermove', itemDragMove);
+  window.removeEventListener('pointerup', itemDragEnd);
+  window.removeEventListener('pointercancel', itemDragEnd);
+  if (!d.active) return;
+  cancelAnimationFrame(d.raf);
+  suppressClickUntil = Date.now() + 500;
+  document.documentElement.classList.remove('folder-dragging');
+  const card = gridCard(d.id);
+  const g = d.ghost, gw = d.ghostWrap;
+  if (card) {
+    const r = card.getBoundingClientRect();
+    g.style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1)';
+    g.style.transform = `translate(${r.left}px, ${r.top}px)`;
+  }
+  setTimeout(() => { gw.remove(); gridCard(d.id)?.classList.remove('drag-src'); }, 230);
+  saveItemOrder(S.label, d.order);
+}
 // 길게 눌렀을 때 뜨는 메뉴 막기
 document.addEventListener('contextmenu', e => { if (e.target.closest?.('.folder-card[data-folder]')) e.preventDefault(); });
 
@@ -610,9 +752,16 @@ function renderFilters() {
   const opts = S.tab === 'artists'
     ? [['new', '최신순'], ['old', '오래된순'], ['name', '이름순'], ['count', '이미지 많은순']]
     : [['new', '최신순'], ['old', '오래된순'], ['name', '제목순']];
-  const sel = h('select', { class: 'sort', 'aria-label': '정렬' }, opts.map(([v, t]) => h('option', { value: v }, t)));
-  sel.value = S.sort[S.tab] || 'new';
-  sel.addEventListener('change', () => { S.sort[S.tab] = sel.value; ls.set('sort', S.sort); renderGrid(); });
+  const inFolderView = !!S.label;
+  const sel = h('select', { class: 'sort', 'aria-label': '정렬' },
+    (inFolderView ? [['manual', '직접 순서'], ...opts] : opts).map(([v, t]) => h('option', { value: v }, t)));
+  sel.value = inFolderView ? (S.folderSort[S.tab] || 'manual') : (S.sort[S.tab] || 'new');
+  sel.addEventListener('change', () => {
+    if (inFolderView) { S.folderSort = { ...S.folderSort, [S.tab]: sel.value }; ls.set('folderSort', S.folderSort); }
+    else { S.sort[S.tab] = sel.value; ls.set('sort', S.sort); }
+    renderFilters();
+    renderGrid();
+  });
   const fav = h('button', {
     class: 'chip chip-icon' + (S.fav ? ' active' : ''), type: 'button',
     title: S.fav ? '즐겨찾기만 보는 중' : '즐겨찾기만 보기', 'aria-label': '즐겨찾기만 보기', 'aria-pressed': S.fav,
@@ -626,7 +775,8 @@ function renderFilters() {
       h('div', { class: 'crumb' },
         ib('back', '폴더 목록으로', leaveFolder, 'crumb-back'),
         h('div', { class: 'crumb-text' },
-          h('span', { class: 'crumb-parent' }, S.tab === 'artists' ? '작가 폴더' : '그림체 폴더'),
+          h('span', { class: 'crumb-parent' }, S.tab === 'artists' ? '작가 폴더' : '그림체 폴더',
+            scope.length > 1 ? h('span', { class: 'crumb-hint' }, isTouch ? ' · 길게 눌러 순서 바꾸기' : ' · 끌어서 순서 바꾸기') : null),
           h('span', { class: 'crumb-title' }, folderName(S.label), h('span', { class: 'n' }, `${scope.length}${unit}`)))),
       h('div', { class: 'filter-tools' },
         fav, sel,
@@ -639,7 +789,10 @@ function renderFilters() {
 
 function visibleItems() {
   const q = S.q.trim().toLowerCase();
-  const sort = S.sort[S.tab] || 'new';
+  const sort = S.label ? (S.folderSort[S.tab] || 'manual') : (S.sort[S.tab] || 'new');
+  if (S.label && sort === 'manual') {
+    return manualSort(S.label, tabItems().filter(it => inFolder(it, S.label) && (!S.fav || it.favorite) && (!q || itemText(it).includes(q))));
+  }
   if (S.tab === 'artists') {
     let list = S.artists.filter(a =>
       inFolder(a, S.label) && (!S.fav || a.favorite) &&
@@ -665,17 +818,23 @@ function visibleItems() {
   return list.sort(by[sort] || by.new);
 }
 
+function itemText(it) {
+  return (S.tab === 'artists'
+    ? [it.tag, it.memo, ...(it.labels || [])]
+    : [it.title, it.memo, ...(it.labels || []), ...(it.sections || []).map(x => x.body)]).join(' ').toLowerCase();
+}
+
 function colCount(w) { return w < 520 ? 2 : w < 860 ? 3 : w < 1240 ? 4 : 5; }
 
 function artistCard(a, colW) {
   const imgs = imagesOf(a.id);
   const cover = coverOf(a, imgs);
   const name = displayName(a.tag) || a.tag;
-  const card = h('article', { class: 'card', tabindex: 0, onclick: () => openArtist(a.id), onkeydown: e => { if (e.key === 'Enter') openArtist(a.id); } });
+  const card = h('article', { class: 'card', tabindex: 0, 'data-id': a.id, onclick: () => openArtist(a.id), onkeydown: e => { if (e.key === 'Enter') openArtist(a.id); } });
   let est;
   if (cover) {
     card.append(h('div', { class: 'card-media', style: { aspectRatio: `${cover.w} / ${cover.h}` } },
-      h('img', { src: urlOf(cover, 'thumb'), alt: name, loading: 'lazy', decoding: 'async' })));
+      h('img', { src: urlOf(cover, 'thumb'), alt: name, loading: 'lazy', decoding: 'async', draggable: 'false' })));
     est = colW * cover.h / cover.w;
   } else {
     card.append(h('div', { class: 'card-text' }, h('span', { class: 'pre' }, 'artist'), h('span', { class: 'nm' }, name)));
@@ -692,9 +851,9 @@ function artistCard(a, colW) {
 }
 
 function styleCard(s, colW) {
-  const card = h('article', { class: 'card', tabindex: 0, onclick: () => openStyle(s.id), onkeydown: e => { if (e.key === 'Enter') openStyle(s.id); } });
+  const card = h('article', { class: 'card', tabindex: 0, 'data-id': s.id, onclick: () => openStyle(s.id), onkeydown: e => { if (e.key === 'Enter') openStyle(s.id); } });
   card.append(h('div', { class: 'card-media', style: { aspectRatio: `${s.w} / ${s.h}` } },
-    h('img', { src: urlOf(s, 'thumb'), alt: styleTitle(s), loading: 'lazy', decoding: 'async' })));
+    h('img', { src: urlOf(s, 'thumb'), alt: styleTitle(s), loading: 'lazy', decoding: 'async', draggable: 'false' })));
   const arts = artistsOfStyle(s);
   const sub = [(s.labels || []).join(' · '), arts.length ? `작가 ${arts.length}` : ''].filter(Boolean).join(' · ');
   card.append(h('div', { class: 'card-cap' },
@@ -1326,7 +1485,7 @@ async function doExport(button) {
   const t = toast('백업 파일을 만드는 중…', { sticky: true });
   try {
     const tombstones = await db.all('tombstones');
-    const blob = await buildBackup({ artists: S.artists, images: S.images, styles: S.styles, tombstones, folderOrder: S.folderOrder, tagSections: S.tagSections, tagItems: S.tagItems });
+    const blob = await buildBackup({ artists: S.artists, images: S.images, styles: S.styles, tombstones, folderOrder: S.folderOrder, itemOrder: S.itemOrder, tagSections: S.tagSections, tagItems: S.tagItems });
     t.close();
     const ok = await saveFile(blob, `atelier-backup-${stamp()}.zip`);
     if (ok) {
@@ -1384,6 +1543,7 @@ async function applyBackup(data, mode) {
     for (const s of stores) await db.putMany(s, incoming[s]);
     await db.putMany('tombstones', data.tombstones);
     if (data.folderOrder) await db.setMeta('folderOrder', data.folderOrder);
+    if (data.itemOrder) await db.setMeta('itemOrder', data.itemOrder);
     return false;
   }
   let localNewer = false;
@@ -1391,6 +1551,10 @@ async function applyBackup(data, mode) {
   const io = data.folderOrder;
   if (io && (!lo || (io.updatedAt || 0) > (lo.updatedAt || 0))) await db.setMeta('folderOrder', io);
   else if (lo && (!io || (lo.updatedAt || 0) > (io.updatedAt || 0))) localNewer = true;
+  const lio = await db.getMeta('itemOrder', null);
+  const iio = data.itemOrder;
+  if (iio && (!lio || (iio.updatedAt || 0) > (lio.updatedAt || 0))) await db.setMeta('itemOrder', iio);
+  else if (lio && (!iio || (lio.updatedAt || 0) > (iio.updatedAt || 0))) localNewer = true;
   const tombs = new Map((await db.all('tombstones')).map(t => [t.id, t]));
   const inTombIds = new Set(data.tombstones.map(t => t.id));
   for (const t of data.tombstones) {
@@ -1425,6 +1589,7 @@ async function wipeAll() {
   if (!await confirmDialog('이 기기의 데이터를 모두 지울까요?', '작가, 화풍 이미지, 그림체, 태그가 모두 삭제돼요. 백업 파일이 없다면 되돌릴 수 없어요.', '모두 지우기')) return;
   await db.clear(['artists', 'artistImages', 'styles', 'tagSections', 'tagItems', 'tombstones']);
   await db.setMeta('folderOrder', { artists: [], styles: [], updatedAt: 0 });
+  await db.setMeta('itemOrder', { artists: {}, styles: {}, updatedAt: 0 });
   await reloadState();
   S.syncedAt = S.dirtyAt = 0;
   await db.setMeta('syncedAt', 0);
@@ -1441,6 +1606,7 @@ async function reloadState() {
   const ids = new Set(S.artists.map(a => a.id));
   S.images = S.images.filter(i => ids.has(i.artistId));
   S.folderOrder = await db.getMeta('folderOrder', { artists: [], styles: [], updatedAt: 0 });
+  S.itemOrder = await db.getMeta('itemOrder', { artists: {}, styles: {}, updatedAt: 0 });
   gver++;
 }
 
@@ -1518,6 +1684,7 @@ async function init() {
     else tagTab.addFromHeader();
   });
   $('#settingsBtn').addEventListener('click', openSettings);
+  $('#grid').addEventListener('pointerdown', itemDragStart);
 
   let rt;
   let lastW = window.innerWidth;
