@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -348,9 +348,12 @@ function renderTabs() {
 
 // ---------- 폴더 ----------
 const UNFILED = '\u0000unfiled';
+const FAVS = '\u0000favorites';   // 즐겨찾기 표시한 항목이 자동으로 모이는 폴더
+const isSpecial = f => f === UNFILED || f === FAVS;
 const tabItems = () => (S.tab === 'artists' ? S.artists : S.styles);
-const folderName = f => (f === UNFILED ? '미분류' : f);
-const inFolder = (it, f) => !f || (f === UNFILED ? !(it.labels?.length) : !!it.labels?.includes(f));
+const folderName = f => (f === UNFILED ? '미분류' : f === FAVS ? '즐겨찾기' : f);
+const inFolder = (it, f) => !f || (f === FAVS ? !!it.favorite : f === UNFILED ? !(it.labels?.length) : !!it.labels?.includes(f));
+const presetFolder = () => (S.label && !isSpecial(S.label) ? [S.label] : []);
 
 function folderList() {
   const map = new Map();
@@ -364,9 +367,11 @@ function folderList() {
     .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name, 'ko'));
   const unfiled = tabItems().filter(it => !it.labels?.length);
   if (unfiled.length && list.length) list.push({ name: UNFILED, items: unfiled });
+  const favs = tabItems().filter(it => it.favorite);
+  if (favs.length) list.unshift({ name: FAVS, items: favs });
   return list;
 }
-const currentFolders = () => folderList().map(f => f.name).filter(n => n !== UNFILED);
+const currentFolders = () => folderList().map(f => f.name).filter(n => !isSpecial(n));
 
 async function saveFolderOrder(names) {
   S.folderOrder = { ...S.folderOrder, [S.tab]: names, updatedAt: now() };
@@ -448,14 +453,16 @@ function folderCard(f) {
   const thumbs = folderThumbs(f.items);
   const unit = S.tab === 'artists' ? '명' : '개';
   return h('button', {
-    class: 'folder-card' + (f.name === UNFILED ? ' unfiled' : ''), type: 'button',
-    'data-folder': f.name === UNFILED ? null : f.name,
+    class: 'folder-card' + (f.name === UNFILED ? ' unfiled' : '') + (f.name === FAVS ? ' favs' : ''), type: 'button',
+    'data-folder': isSpecial(f.name) ? null : f.name,
     onclick: () => enterFolder(f.name),
   },
     h('div', { class: 'folder-cover n' + thumbs.length },
       thumbs.length ? thumbs.map(u => h('img', { src: u, alt: '', loading: 'lazy', draggable: 'false' })) : h('span', { class: 'folder-empty', html: icon('folder') })),
     h('div', { class: 'folder-cap' },
-      h('span', { class: 'folder-name' }, folderName(f.name)),
+      h('span', { class: 'folder-name' },
+        f.name === FAVS ? h('span', { class: 'folder-star', html: icon('starFill') }) : null,
+        folderName(f.name)),
       h('span', { class: 'folder-n' }, `${f.items.length}${unit}`)));
 }
 
@@ -553,7 +560,7 @@ function folderDragEnd() {
   setTimeout(() => { g.remove(); d.card.classList.remove('drag-src'); }, 230);
   document.documentElement.classList.remove('folder-dragging');
   const names = [...d.grid.querySelectorAll('.folder-card[data-folder]')].map(c => c.dataset.folder);
-  const prev = folderList().map(f => f.name).filter(n => n !== UNFILED);
+  const prev = folderList().map(f => f.name).filter(n => !isSpecial(n));
   if (names.join('\u0000') !== prev.join('\u0000')) saveFolderOrder(names);
 }
 
@@ -582,8 +589,8 @@ function renderFolders() {
   el.replaceChildren(
     h('div', { class: 'block-head' },
       h('h2', {}, '폴더'),
-      h('span', { class: 'n' }, list.filter(f => f.name !== UNFILED).length || ''),
-      list.filter(f => f.name !== UNFILED).length > 1 ? h('span', { class: 'block-hint' }, isTouch ? '길게 눌러 순서 바꾸기' : '끌어서 순서 바꾸기') : null),
+      h('span', { class: 'n' }, list.filter(f => !isSpecial(f.name)).length || ''),
+      list.filter(f => !isSpecial(f.name)).length > 1 ? h('span', { class: 'block-hint' }, isTouch ? '길게 눌러 순서 바꾸기' : '끌어서 순서 바꾸기') : null),
     h('div', { class: 'folder-grid', onpointerdown: folderDragStart },
       list.map(folderCard),
       h('button', { class: 'folder-card add', type: 'button', onclick: newFolder },
@@ -603,12 +610,15 @@ function renderFilters() {
   const sel = h('select', { class: 'sort', 'aria-label': '정렬' }, opts.map(([v, t]) => h('option', { value: v }, t)));
   sel.value = S.sort[S.tab] || 'new';
   sel.addEventListener('change', () => { S.sort[S.tab] = sel.value; ls.set('sort', S.sort); renderGrid(); });
-  const fav = h('button', { class: 'chip' + (S.fav ? ' active' : ''), type: 'button', onclick: () => { S.fav = !S.fav; renderAll(); } },
-    h('span', { class: 'i', html: icon(S.fav ? 'starFill' : 'star') }), '즐겨찾기', h('span', { class: 'n' }, favN));
+  const fav = h('button', {
+    class: 'chip chip-icon' + (S.fav ? ' active' : ''), type: 'button',
+    title: S.fav ? '즐겨찾기만 보는 중' : '즐겨찾기만 보기', 'aria-label': '즐겨찾기만 보기', 'aria-pressed': S.fav,
+    onclick: () => { S.fav = !S.fav; renderAll(); },
+  }, h('span', { class: 'i', html: icon(S.fav ? 'starFill' : 'star') }));
 
   if (S.label) {
     const unit = S.tab === 'artists' ? '명' : '개';
-    const real = S.label !== UNFILED;
+    const real = !isSpecial(S.label);
     $('#filters').replaceChildren(
       h('div', { class: 'crumb' },
         ib('back', '폴더 목록으로', leaveFolder, 'crumb-back'),
@@ -730,6 +740,13 @@ function renderEmpty(n) {
   const total = S.tab === 'artists' ? S.artists.length : S.styles.length;
   if (n) { el.hidden = true; return; }
   el.hidden = false;
+  if (S.label === FAVS && !S.q.trim()) {
+    el.replaceChildren(
+      h('div', { class: 'empty-mark', html: icon('star') }),
+      h('h2', {}, '즐겨찾기한 항목이 없어요'),
+      h('p', {}, '항목 화면에서 ‘즐겨찾기’를 누르면 이 폴더에 자동으로 모여요.'));
+    return;
+  }
   if (S.label && !S.q.trim() && !S.fav) {
     const artists = S.tab === 'artists';
     el.replaceChildren(
@@ -738,7 +755,7 @@ function renderEmpty(n) {
       h('p', {}, artists
         ? '여기서 작가를 등록하면 이 폴더에 들어가요. 이미 등록한 작가는 작가 화면의 ‘폴더’에서 이 폴더를 지정하세요.'
         : '여기서 그림체를 추가하면 이 폴더에 들어가요. 이미 추가한 그림체는 그림체 화면의 ‘폴더’에서 이 폴더를 지정하세요.'),
-      S.label !== UNFILED ? btn('plus', artists ? '작가 등록' : '그림체 추가', () => artists ? openNewArtist([]) : pickFiles(importStyles), 'btn-primary') : null);
+      !isSpecial(S.label) ? btn('plus', artists ? '작가 등록' : '그림체 추가', () => artists ? openNewArtist([]) : pickFiles(importStyles), 'btn-primary') : null);
     return;
   }
   if (total) {
@@ -938,7 +955,7 @@ function openNewArtist(files = [], presetTag = '') {
   layer._newArtist = true;
   const pending = [];
   const detected = new Map();
-  let labels = S.tab === 'artists' && S.label && S.label !== UNFILED ? [S.label] : [];
+  let labels = S.tab === 'artists' ? presetFolder() : [];
 
   const tagInput = h('input', { class: 'input input-lg', placeholder: 'artist:이름', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'done' });
   tagInput.value = presetTag;
@@ -987,7 +1004,7 @@ function openNewArtist(files = [], presetTag = '') {
     try {
       let a = checkDup();
       if (!a) {
-        a = { id: uid(), tag, memo: memo.value.trim(), favorite: false, labels, coverId: null, createdAt: now(), updatedAt: now() };
+        a = { id: uid(), tag, memo: memo.value.trim(), favorite: S.tab === 'artists' && S.label === FAVS, labels, coverId: null, createdAt: now(), updatedAt: now() };
         await db.put('artists', a);
         S.artists.push(a);
         gver++;
@@ -1045,7 +1062,8 @@ async function importStyles(files) {
   if (!imgs.length) return;
   const t = toast(`그림체 읽는 중… 0/${imgs.length}`, { sticky: true });
   let added = 0, dup = 0, nometa = 0, failed = 0, lastId = null;
-  const presetLabels = S.tab === 'styles' && S.label && S.label !== UNFILED ? [S.label] : [];
+  const presetLabels = S.tab === 'styles' ? presetFolder() : [];
+  const presetFav = S.tab === 'styles' && S.label === FAVS;
   for (const f of imgs) {
     try {
       const meta = await readNaiMetadata(f);
@@ -1055,7 +1073,7 @@ async function importStyles(files) {
       const s = {
         id: uid(), title: '', thumb: im.thumb, image: im.image, w: im.w, h: im.h,
         sections: meta?.sections || [], raw: meta?.raw || '', source: meta?.source || 'none', sig,
-        fileName: f.name || '', memo: '', favorite: false, labels: [...presetLabels],
+        fileName: f.name || '', memo: '', favorite: presetFav, labels: [...presetLabels],
         createdAt: now(), updatedAt: now(),
       };
       await db.put('styles', s);

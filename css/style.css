@@ -622,7 +622,15 @@ main { max-width: var(--maxw); margin: 0 auto; padding: 14px var(--pad) calc(64p
 
 /* ---------- tag tab ---------- */
 .seg.mode-seg { display: inline-flex; margin-top: 0; flex: none; }
-.seg.mode-seg button { flex: none; white-space: nowrap; }
+.seg.mode-seg button { flex: none; display: grid; place-items: center; width: 46px; padding: 0; white-space: nowrap; }
+.seg.mode-seg button svg { width: 17px; height: 17px; }
+.chip.chip-icon { width: 34px; height: 34px; padding: 0; justify-content: center; }
+.chip.chip-icon .i svg { width: 15px; height: 15px; }
+.chip.chip-icon.active { background: var(--gold-soft); border-color: #E3D3B4; color: var(--gold-ink); }
+.chip.chip-icon.active .i svg { color: var(--gold); }
+.folder-card.favs .folder-name { display: inline-flex; align-items: center; gap: 6px; }
+.folder-star svg { width: 13px; height: 13px; color: var(--gold); }
+.folder-card.favs .folder-empty svg { color: var(--gold); }
 .tag-view { padding-top: 6px; }
 .tblock { margin-bottom: 40px; }
 .tblock-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; min-height: 32px; }

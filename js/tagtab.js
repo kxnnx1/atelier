@@ -527,10 +527,11 @@ export function createTagTab(ctx) {
 
   function renderFilters() {
     const seg = h('div', { class: 'seg mode-seg', role: 'tablist' },
-      [['use', '실사용'], ['edit', '편집']].map(([v, l]) => h('button', {
+      [['use', '실사용', 'book'], ['edit', '편집', 'edit']].map(([v, l, ic]) => h('button', {
         type: 'button', role: 'tab', class: T.mode === v ? 'active' : '', 'aria-selected': T.mode === v,
+        title: `${l} 모드`, 'aria-label': `${l} 모드`, html: icon(ic),
         onclick: () => { if (T.mode === v) return; setMode(v); closePop(); ctx.renderAll(); },
-      }, l)));
+      })));
     $('#filters').replaceChildren(...[
       h('div', { class: 'chips' }, seg),
       T.mode === 'edit' ? btn('folderPlus', '구역 추가', addSection, 'btn-ghost sm') : null,
