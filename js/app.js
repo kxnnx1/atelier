@@ -5,7 +5,7 @@ import { makeImages } from './thumb.js';
 import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 
-const VERSION = '1.0.2';
+const VERSION = '1.1.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -186,6 +186,35 @@ function dialog({ title, text, actions }) {
 const confirmDialog = (title, text, ok = '삭제') =>
   dialog({ title, text, actions: [{ label: '취소', value: false }, { label: ok, value: true, kind: 'btn-danger' }] });
 
+// 이름 입력 다이얼로그. 취소하면 null
+function promptDialog({ title, text, value = '', placeholder = '', ok = '확인' }) {
+  return new Promise(resolve => {
+    const input = h('input', { class: 'input', value, placeholder, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', enterkeyhint: 'done' });
+    const done = v => {
+      layer.classList.remove('open');
+      setTimeout(() => layer.remove(), 250);
+      document.removeEventListener('keydown', onKey, true);
+      resolve(v);
+    };
+    const submit = () => { const v = cleanFolder(input.value); if (v) done(v); else input.focus(); };
+    const onKey = e => { if (e.key === 'Escape') { e.stopImmediatePropagation(); done(null); } };
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) submit(); });
+    const layer = h('div', { class: 'layer dialog-layer' },
+      h('div', { class: 'scrim', onclick: () => done(null) }),
+      h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true' },
+        h('h3', { class: 'dialog-title' }, title),
+        text ? h('p', { class: 'dialog-text' }, text) : null,
+        h('div', { class: 'dialog-field' }, input),
+        h('div', { class: 'dialog-actions' },
+          h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => done(null) }, '취소'),
+          h('button', { class: 'btn btn-primary', type: 'button', onclick: submit }, ok))));
+    document.body.append(layer);
+    document.addEventListener('keydown', onKey, true);
+    requestAnimationFrame(() => requestAnimationFrame(() => { layer.classList.add('open'); input.focus(); input.select(); }));
+  });
+}
+const cleanFolder = s => String(s || '').replace(/^#+/, '').replace(/[,\n]/g, ' ').replace(/\s+/g, ' ').trim();
+
 // ---------- 레이어(시트) 스택 ----------
 const stack = [];
 function makeLayer(cls = '') {
@@ -208,14 +237,21 @@ function openLayer(layer) {
 function closeTop() { if (stack.length) history.back(); }
 window.addEventListener('popstate', () => {
   const layer = stack.pop();
-  if (!layer) return;
+  if (!layer) {
+    // 시트가 없으면 '뒤로'는 폴더에서 나가기
+    if (S.label) { S.label = null; S.q = ''; $('#search').value = ''; renderAll(); window.scrollTo({ top: 0 }); }
+    return;
+  }
   layer.classList.remove('open');
   setTimeout(() => layer.remove(), 340);
   if (!stack.length) document.documentElement.classList.remove('locked');
   else stack[stack.length - 1]._refresh?.();
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && stack.length && !document.querySelector('.dialog-layer')) closeTop();
+  if (e.key === 'Escape' && !document.querySelector('.dialog-layer')) {
+    if (stack.length) closeTop();
+    else if (S.label && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) leaveFolder();
+  }
   if (e.key === '/' && !stack.length && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
     e.preventDefault();
     $('#search').focus();
@@ -227,24 +263,25 @@ function field(label, ...kids) {
   return h('div', { class: 'field' }, h('div', { class: 'field-label' }, label), ...kids);
 }
 
-function labelEditor(initial, onChange) {
+// 폴더 지정 (한 항목이 여러 폴더에 들어갈 수 있음). 데이터는 labels 배열에 저장
+function labelEditor(initial, onChange, options = allLabels()) {
   let labels = [...(initial || [])];
   const listId = 'dl-' + Math.random().toString(36).slice(2);
   const chips = h('span', { class: 'label-chips' });
   const input = h('input', {
-    class: 'label-input', placeholder: '#라벨 추가', list: listId,
+    class: 'label-input', placeholder: '+ 폴더에 넣기', list: listId,
     autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'done',
   });
-  const dl = h('datalist', { id: listId }, allLabels().map(l => h('option', { value: l })));
+  const dl = h('datalist', { id: listId }, options.map(l => h('option', { value: l })));
   const emit = () => onChange([...labels]);
   const render = () => chips.replaceChildren(...labels.map(l =>
-    h('span', { class: 'label-chip' }, '#' + l,
+    h('span', { class: 'label-chip' }, h('span', { class: 'i', html: icon('folder') }), l,
       h('button', {
         class: 'label-x', type: 'button', 'aria-label': `${l} 삭제`, html: icon('x'),
         onclick: () => { labels = labels.filter(x => x !== l); render(); emit(); },
       }))));
   const commit = () => {
-    const parts = input.value.split(/[\s,#]+/).map(s => s.trim()).filter(Boolean);
+    const parts = input.value.split(/[,#\n]+/).map(cleanFolder).filter(Boolean);
     input.value = '';
     let changed = false;
     for (const p of parts) if (!labels.includes(p)) { labels.push(p); changed = true; }
@@ -303,28 +340,153 @@ function renderTabs() {
   $('#addLabel').textContent = S.tab === 'artists' ? '작가 등록' : '그림체 추가';
 }
 
+// ---------- 폴더 ----------
+const UNFILED = '\u0000unfiled';
+const tabItems = () => (S.tab === 'artists' ? S.artists : S.styles);
+const folderName = f => (f === UNFILED ? '미분류' : f);
+const inFolder = (it, f) => !f || (f === UNFILED ? !(it.labels?.length) : !!it.labels?.includes(f));
+
+function folderList() {
+  const map = new Map();
+  for (const it of tabItems()) for (const l of it.labels || []) {
+    if (!map.has(l)) map.set(l, []);
+    map.get(l).push(it);
+  }
+  const list = [...map].map(([name, items]) => ({ name, items })).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  const unfiled = tabItems().filter(it => !it.labels?.length);
+  if (unfiled.length && list.length) list.push({ name: UNFILED, items: unfiled });
+  return list;
+}
+const currentFolders = () => folderList().map(f => f.name).filter(n => n !== UNFILED);
+
+function enterFolder(name) {
+  S.label = name;
+  S.q = '';
+  $('#search').value = '';
+  history.pushState({ folder: name }, '');
+  renderAll();
+  window.scrollTo({ top: 0 });
+}
+function leaveFolder() {
+  if (!S.label) return;
+  if (history.state?.folder != null) history.back();
+  else { S.label = null; renderAll(); }
+}
+
+async function newFolder() {
+  const name = await promptDialog({
+    title: '새 폴더',
+    text: S.tab === 'artists' ? '폴더를 만든 뒤 그 안에서 작가를 등록하거나, 작가 상세 화면에서 이 폴더를 지정하세요.' : '폴더를 만든 뒤 그 안에서 그림체를 추가하거나, 그림체 상세 화면에서 이 폴더를 지정하세요.',
+    placeholder: '예: 반실사',
+    ok: '만들기',
+  });
+  if (name) enterFolder(name);
+}
+
+async function renameFolder(old) {
+  const name = await promptDialog({ title: '폴더 이름 바꾸기', value: old, ok: '바꾸기' });
+  if (!name || name === old) return;
+  const changed = tabItems().filter(it => it.labels?.includes(old));
+  const t = now();
+  for (const it of changed) {
+    it.labels = [...new Set(it.labels.map(l => (l === old ? name : l)))];
+    it.updatedAt = t;
+  }
+  await db.putMany(S.tab === 'artists' ? 'artists' : 'styles', changed);
+  markDirty();
+  S.label = name;
+  history.replaceState({ folder: name }, '');
+  renderAll();
+  toast('폴더 이름을 바꿨어요');
+}
+
+async function deleteFolder(name) {
+  const changed = tabItems().filter(it => it.labels?.includes(name));
+  const what = S.tab === 'artists' ? `작가 ${changed.length}명` : `그림체 ${changed.length}개`;
+  if (!await confirmDialog(`‘${name}’ 폴더를 삭제할까요?`, changed.length ? `폴더만 지워지고 안의 항목(${what})은 그대로 남아요.` : '빈 폴더예요.', '폴더 삭제')) return;
+  const t = now();
+  for (const it of changed) { it.labels = it.labels.filter(l => l !== name); it.updatedAt = t; }
+  await db.putMany(S.tab === 'artists' ? 'artists' : 'styles', changed);
+  markDirty();
+  toast('폴더를 삭제했어요');
+  leaveFolder();
+  renderAll();
+}
+
+function folderThumbs(items) {
+  const urlsOut = [];
+  for (const it of items) {
+    const rec = S.tab === 'artists' ? coverOf(it) : it;
+    if (rec) urlsOut.push(urlOf(rec, 'thumb'));
+    if (urlsOut.length === 4) break;
+  }
+  return urlsOut;
+}
+
+function folderCard(f) {
+  const thumbs = folderThumbs(f.items);
+  const unit = S.tab === 'artists' ? '명' : '개';
+  return h('button', { class: 'folder-card' + (f.name === UNFILED ? ' unfiled' : ''), type: 'button', onclick: () => enterFolder(f.name) },
+    h('div', { class: 'folder-cover n' + thumbs.length },
+      thumbs.length ? thumbs.map(u => h('img', { src: u, alt: '', loading: 'lazy' })) : h('span', { class: 'folder-empty', html: icon('folder') })),
+    h('div', { class: 'folder-cap' },
+      h('span', { class: 'folder-name' }, folderName(f.name)),
+      h('span', { class: 'folder-n' }, `${f.items.length}${unit}`)));
+}
+
+function renderFolders() {
+  const el = $('#folders');
+  const head = $('#gridHead');
+  const atRoot = !S.label && !S.q.trim();
+  const total = tabItems().length;
+  if (!atRoot || !total) {
+    el.hidden = true;
+    head.hidden = true;
+    return;
+  }
+  const list = folderList();
+  el.hidden = false;
+  el.style.setProperty('--fcols', colCount($('#grid').clientWidth || window.innerWidth) + 1);
+  el.replaceChildren(
+    h('div', { class: 'block-head' }, h('h2', {}, '폴더'), h('span', { class: 'n' }, list.filter(f => f.name !== UNFILED).length || '')),
+    h('div', { class: 'folder-grid' },
+      list.map(folderCard),
+      h('button', { class: 'folder-card add', type: 'button', onclick: newFolder },
+        h('div', { class: 'folder-cover n0' }, h('span', { class: 'folder-empty', html: icon('folderPlus') })),
+        h('div', { class: 'folder-cap' }, h('span', { class: 'folder-name' }, '새 폴더')))));
+  head.hidden = false;
+  head.replaceChildren(h('div', { class: 'block-head' }, h('h2', {}, S.tab === 'artists' ? '모든 작가' : '모든 그림체'), h('span', { class: 'n' }, total)));
+}
+
 function renderFilters() {
-  const items = S.tab === 'artists' ? S.artists : S.styles;
-  const counts = new Map();
-  items.forEach(it => (it.labels || []).forEach(l => counts.set(l, (counts.get(l) || 0) + 1)));
-  if (S.label && !counts.has(S.label)) S.label = null;
-  const labels = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'));
-  const favN = items.filter(x => x.favorite).length;
-  const chip = (label, active, onclick, n, ic) =>
-    h('button', { class: 'chip' + (active ? ' active' : ''), type: 'button', onclick },
-      ic ? h('span', { class: 'i', html: icon(ic) }) : null, label, n != null ? h('span', { class: 'n' }, n) : null);
-  const chipsEl = h('div', { class: 'chips' },
-    chip('전체', !S.label && !S.fav, () => { S.label = null; S.fav = false; renderAll(); }, items.length),
-    chip('즐겨찾기', S.fav, () => { S.fav = !S.fav; renderAll(); }, favN, S.fav ? 'starFill' : 'star'),
-    labels.length ? h('span', { class: 'chip-sep' }) : null,
-    labels.map(([l, n]) => chip('#' + l, S.label === l, () => { S.label = S.label === l ? null : l; renderAll(); }, n)));
+  const items = tabItems();
+  const scope = items.filter(it => inFolder(it, S.label));
+  const favN = scope.filter(x => x.favorite).length;
   const opts = S.tab === 'artists'
     ? [['new', '최신순'], ['old', '오래된순'], ['name', '이름순'], ['count', '이미지 많은순']]
     : [['new', '최신순'], ['old', '오래된순'], ['name', '제목순']];
   const sel = h('select', { class: 'sort', 'aria-label': '정렬' }, opts.map(([v, t]) => h('option', { value: v }, t)));
   sel.value = S.sort[S.tab] || 'new';
   sel.addEventListener('change', () => { S.sort[S.tab] = sel.value; ls.set('sort', S.sort); renderGrid(); });
-  $('#filters').replaceChildren(chipsEl, sel);
+  const fav = h('button', { class: 'chip' + (S.fav ? ' active' : ''), type: 'button', onclick: () => { S.fav = !S.fav; renderAll(); } },
+    h('span', { class: 'i', html: icon(S.fav ? 'starFill' : 'star') }), '즐겨찾기', h('span', { class: 'n' }, favN));
+
+  if (S.label) {
+    const unit = S.tab === 'artists' ? '명' : '개';
+    const real = S.label !== UNFILED;
+    $('#filters').replaceChildren(
+      h('div', { class: 'crumb' },
+        ib('back', '폴더 목록으로', leaveFolder, 'crumb-back'),
+        h('div', { class: 'crumb-text' },
+          h('span', { class: 'crumb-parent' }, S.tab === 'artists' ? '작가 폴더' : '그림체 폴더'),
+          h('span', { class: 'crumb-title' }, folderName(S.label), h('span', { class: 'n' }, `${scope.length}${unit}`)))),
+      h('div', { class: 'filter-tools' },
+        fav, sel,
+        real ? ib('edit', '폴더 이름 바꾸기', () => renameFolder(S.label), 'sm') : null,
+        real ? ib('trash', '폴더 삭제', () => deleteFolder(S.label), 'sm') : null));
+    return;
+  }
+  $('#filters').replaceChildren(h('div', { class: 'chips' }, fav), sel);
 }
 
 function visibleItems() {
@@ -332,7 +494,7 @@ function visibleItems() {
   const sort = S.sort[S.tab] || 'new';
   if (S.tab === 'artists') {
     let list = S.artists.filter(a =>
-      (!S.label || a.labels?.includes(S.label)) && (!S.fav || a.favorite) &&
+      inFolder(a, S.label) && (!S.fav || a.favorite) &&
       (!q || [a.tag, a.memo, ...(a.labels || [])].join(' ').toLowerCase().includes(q)));
     const cnt = new Map();
     S.images.forEach(i => cnt.set(i.artistId, (cnt.get(i.artistId) || 0) + 1));
@@ -345,7 +507,7 @@ function visibleItems() {
     return list.sort(by[sort] || by.new);
   }
   let list = S.styles.filter(s =>
-    (!S.label || s.labels?.includes(S.label)) && (!S.fav || s.favorite) &&
+    inFolder(s, S.label) && (!S.fav || s.favorite) &&
     (!q || [s.title, s.memo, ...(s.labels || []), ...(s.sections || []).map(x => x.body)].join(' ').toLowerCase().includes(q)));
   const by = {
     new: (a, b) => b.createdAt - a.createdAt,
@@ -371,7 +533,7 @@ function artistCard(a, colW) {
     card.append(h('div', { class: 'card-text' }, h('span', { class: 'pre' }, 'artist'), h('span', { class: 'nm' }, name)));
     est = colW * 0.75;
   }
-  const sub = [(a.labels || []).map(l => '#' + l).join(' '), imgs.length ? `${imgs.length}장` : ''].filter(Boolean).join(' · ');
+  const sub = [(a.labels || []).join(' · '), imgs.length ? `${imgs.length}장` : ''].filter(Boolean).join(' · ');
   card.append(h('div', { class: 'card-cap' },
     h('div', { class: 'card-meta' },
       h('div', { class: 'card-title' }, name),
@@ -386,7 +548,7 @@ function styleCard(s, colW) {
   card.append(h('div', { class: 'card-media', style: { aspectRatio: `${s.w} / ${s.h}` } },
     h('img', { src: urlOf(s, 'thumb'), alt: styleTitle(s), loading: 'lazy', decoding: 'async' })));
   const arts = artistsOfStyle(s);
-  const sub = [(s.labels || []).map(l => '#' + l).join(' '), arts.length ? `작가 ${arts.length}` : ''].filter(Boolean).join(' · ');
+  const sub = [(s.labels || []).join(' · '), arts.length ? `작가 ${arts.length}` : ''].filter(Boolean).join(' · ');
   card.append(h('div', { class: 'card-cap' },
     h('div', { class: 'card-meta' },
       h('div', { class: 'card-title' }, styleTitle(s)),
@@ -423,8 +585,19 @@ function renderEmpty(n) {
   const total = S.tab === 'artists' ? S.artists.length : S.styles.length;
   if (n) { el.hidden = true; return; }
   el.hidden = false;
+  if (S.label && !S.q.trim() && !S.fav) {
+    const artists = S.tab === 'artists';
+    el.replaceChildren(
+      h('div', { class: 'empty-mark', html: icon('folder') }),
+      h('h2', {}, '비어 있는 폴더예요'),
+      h('p', {}, artists
+        ? '여기서 작가를 등록하면 이 폴더에 들어가요. 이미 등록한 작가는 작가 화면의 ‘폴더’에서 이 폴더를 지정하세요.'
+        : '여기서 그림체를 추가하면 이 폴더에 들어가요. 이미 추가한 그림체는 그림체 화면의 ‘폴더’에서 이 폴더를 지정하세요.'),
+      S.label !== UNFILED ? btn('plus', artists ? '작가 등록' : '그림체 추가', () => artists ? openNewArtist([]) : pickFiles(importStyles), 'btn-primary') : null);
+    return;
+  }
   if (total) {
-    el.replaceChildren(h('h2', {}, '조건에 맞는 항목이 없어요'), h('p', {}, '검색어나 라벨 필터를 바꿔 보세요.'));
+    el.replaceChildren(h('h2', {}, '조건에 맞는 항목이 없어요'), h('p', {}, '검색어나 즐겨찾기 필터를 바꿔 보세요.'));
     return;
   }
   if (S.tab === 'artists') {
@@ -459,6 +632,7 @@ function updateDot() {
 function renderAll() {
   renderTabs();
   renderFilters();
+  renderFolders();
   renderGrid();
   updateDot();
 }
@@ -552,7 +726,7 @@ function artistView(a, rerender) {
     h('div', { class: 'detail-actions' },
       btn('copy', '태그 복사', () => copy(a.tag, '태그를 복사했어요'), 'btn-primary'),
       favBtn(a, p => saveArtist(a, p))),
-    field('라벨', labelEditor(a.labels, labels => saveArtist(a, { labels }))),
+    field('폴더', labelEditor(a.labels, labels => saveArtist(a, { labels }), [...new Set(S.artists.flatMap(x => x.labels || []))])),
     field('메모', memoBox(a.memo, memo => saveArtist(a, { memo }))),
     h('div', { class: 'section-h' }, h('h3', {}, '화풍 이미지'), h('span', { class: 'n' }, `${imgs.length}장`)),
     h('div', { class: 'img-grid' }, tiles, addTile),
@@ -610,7 +784,7 @@ function openNewArtist(files = [], presetTag = '') {
   layer._newArtist = true;
   const pending = [];
   const detected = new Map();
-  let labels = S.tab === 'artists' && S.label ? [S.label] : [];
+  let labels = S.tab === 'artists' && S.label && S.label !== UNFILED ? [S.label] : [];
 
   const tagInput = h('input', { class: 'input input-lg', placeholder: 'artist:이름', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'done' });
   tagInput.value = presetTag;
@@ -688,7 +862,7 @@ function openNewArtist(files = [], presetTag = '') {
     h('h2', { class: 'detail-title' }, '작가 태그 등록'),
     field('태그 원문', tagInput, hint, suggest),
     field('화풍 이미지', thumbs),
-    field('라벨', labelEditor(labels, v => { labels = v; })),
+    field('폴더', labelEditor(labels, v => { labels = v; }, [...new Set(S.artists.flatMap(x => x.labels || []))])),
     field('메모', memo),
     h('div', { class: 'form-actions' }, btn(null, '취소', closeTop), saveBtn)));
   openLayer(layer);
@@ -717,7 +891,7 @@ async function importStyles(files) {
   if (!imgs.length) return;
   const t = toast(`그림체 읽는 중… 0/${imgs.length}`, { sticky: true });
   let added = 0, dup = 0, nometa = 0, failed = 0, lastId = null;
-  const presetLabels = S.tab === 'styles' && S.label ? [S.label] : [];
+  const presetLabels = S.tab === 'styles' && S.label && S.label !== UNFILED ? [S.label] : [];
   for (const f of imgs) {
     try {
       const meta = await readNaiMetadata(f);
@@ -845,7 +1019,7 @@ function styleView(s, rerender) {
       h('div', { class: 'detail-actions' },
         arts.length ? btn('copy', '작가 태그 복사', () => copy(arts.map(formatTag).join(', '), '작가 태그를 복사했어요'), 'btn-primary') : null,
         favBtn(s, p => saveStyle(s, p))),
-      field('라벨', labelEditor(s.labels, labels => saveStyle(s, { labels }))),
+      field('폴더', labelEditor(s.labels, labels => saveStyle(s, { labels }), [...new Set(S.styles.flatMap(x => x.labels || []))])),
       field('메모', memoBox(s.memo, memo => saveStyle(s, { memo }))),
       seg,
       pane,
@@ -1134,7 +1308,7 @@ async function init() {
     window.scrollTo({ top: 0 });
   }));
   let qt;
-  $('#search').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value; renderGrid(); }, 90); });
+  $('#search').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value; renderFolders(); renderGrid(); }, 90); });
   $('#addBtn').addEventListener('click', () => S.tab === 'artists' ? openNewArtist([]) : pickFiles(importStyles));
   $('#settingsBtn').addEventListener('click', openSettings);
 
@@ -1145,6 +1319,7 @@ async function init() {
     rt = setTimeout(() => {
       if (window.innerWidth === lastW) return;
       lastW = window.innerWidth;
+      renderFolders();
       renderGrid();
     }, 140);
   });
@@ -1160,6 +1335,13 @@ async function init() {
     toast('저장소를 열지 못했어요. 개인정보 보호 모드에서는 저장이 안 될 수 있어요.', { ms: 6000 });
   }
   renderBanner();
+  // 세리프 폰트가 준비된 뒤에 화면을 보여줘서 글꼴이 바뀌며 깜빡이지 않게 한다
+  try {
+    await Promise.race([
+      document.fonts.load('500 20px "Atelier Serif"', '가A'),
+      new Promise(r => setTimeout(r, 3000)),
+    ]);
+  } catch { /* 무시 */ }
   renderAll();
   document.body.classList.add('ready');
 
