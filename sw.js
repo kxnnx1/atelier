@@ -1,5 +1,5 @@
 // 앱 파일을 수정해서 다시 올릴 때는 이 숫자를 올려 주세요.
-const VERSION = 'atelier-v1.6.2';
+const VERSION = 'atelier-v1.6.3';
 const FONTS = 'atelier-fonts';
 const SHELL = [
   './',
@@ -23,7 +23,8 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // HTTP 캐시를 건너뛰고 받아서, 새 버전 파일과 옛 파일이 섞이지 않게 한다
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {

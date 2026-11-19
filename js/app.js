@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.6.2';
+const VERSION = '1.6.3';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -79,20 +79,54 @@ function hash(str) {
 
 // ---------- 이미지 URL 캐시 ----------
 const urls = new Map();
+// 이미지를 읽지 못했을 때 보여줄 빈 이미지 (Safari의 '?' 아이콘 대신)
+const PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">' +
+  '<rect width="300" height="300" fill="#F4F3EF"/>' +
+  '<g fill="none" stroke="#C9C5BC" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" transform="translate(111 114)">' +
+  '<rect x="0" y="0" width="78" height="66" rx="10"/><circle cx="24" cy="24" r="7"/><path d="M78 50 58 30 14 66"/></g></svg>');
+const urlInfo = new Map();   // blob URL → { rec, kind }
+
 function urlOf(rec, kind) {
-  if (!rec || !rec[kind]) return '';
+  if (!rec) return '';
+  // 상세용 이미지가 없으면 썸네일로 대신하고, 둘 다 없으면 빈 이미지
+  if (!rec[kind]) {
+    if (kind === 'image' && rec.thumb) return urlOf(rec, 'thumb');
+    return PLACEHOLDER;
+  }
   const key = rec.id + ':' + kind;
   let u = urls.get(key);
-  if (!u) { u = URL.createObjectURL(rec[kind]); urls.set(key, u); }
+  if (!u) {
+    u = URL.createObjectURL(rec[kind]);
+    urls.set(key, u);
+    urlInfo.set(u, { rec, kind });
+  }
   return u;
 }
 function dropUrls(id) {
   for (const k of ['thumb', 'image']) {
     const u = urls.get(id + ':' + k);
-    if (u) { URL.revokeObjectURL(u); urls.delete(id + ':' + k); }
+    if (u) { URL.revokeObjectURL(u); urls.delete(id + ':' + k); urlInfo.delete(u); }
   }
 }
-function dropAllUrls() { urls.forEach(u => URL.revokeObjectURL(u)); urls.clear(); }
+function dropAllUrls() { urls.forEach(u => URL.revokeObjectURL(u)); urls.clear(); urlInfo.clear(); }
+
+// 이미지가 깨지면 한 번 새 주소로 다시 시도하고, 그래도 안 되면 빈 이미지로 바꾼다
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.src.startsWith('blob:')) return;
+  const info = urlInfo.get(img.src);
+  if (info && !img.dataset.retried) {
+    img.dataset.retried = '1';
+    const key = info.rec.id + ':' + info.kind;
+    URL.revokeObjectURL(img.src);
+    urlInfo.delete(img.src);
+    urls.delete(key);
+    img.src = urlOf(info.rec, info.kind);
+    return;
+  }
+  img.src = PLACEHOLDER;
+}, true);
 
 // ---------- 데이터 도우미 ----------
 const imagesOf = id => S.images.filter(i => i.artistId === id).sort((a, b) => a.createdAt - b.createdAt);
@@ -1711,6 +1745,9 @@ async function init() {
     toast('저장소를 열지 못했어요. 개인정보 보호 모드에서는 저장이 안 될 수 있어요.', { ms: 6000 });
   }
   renderBanner();
+  // 예전 방식으로 저장돼 이미 읽을 수 없게 된 이미지가 있으면 알려준다
+  const broken = [...S.images, ...S.styles, ...S.tagItems].filter(r => r._broken).length;
+  if (broken) toast(`이미지 ${broken}장을 불러오지 못했어요. 해당 항목에 이미지를 다시 넣어 주세요.`, { ms: 6000 });
   // 세리프 폰트가 준비된 뒤에 화면을 보여줘서 글꼴이 바뀌며 깜빡이지 않게 한다
   try {
     await Promise.race([
