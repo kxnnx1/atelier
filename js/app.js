@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.6.1';
+const VERSION = '1.6.2';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -840,11 +840,12 @@ function artistCard(a, colW) {
     card.append(h('div', { class: 'card-text' }, h('span', { class: 'pre' }, 'artist'), h('span', { class: 'nm' }, name)));
     est = colW * 0.75;
   }
-  const sub = [(a.labels || []).join(' · '), imgs.length ? `${imgs.length}장` : ''].filter(Boolean).join(' · ');
+  // 이름 아래에는 메모를 한 줄로 보여준다
+  const memo = (a.memo || '').replace(/\s+/g, ' ').trim();
   card.append(h('div', { class: 'card-cap' },
     h('div', { class: 'card-meta' },
       h('div', { class: 'card-title' }, name),
-      h('div', { class: 'card-sub' }, sub || '이미지 없음')),
+      h('div', { class: 'card-sub', title: a.memo || null }, memo || ' ')),
     ib('copy', '태그 복사', e => { e.stopPropagation(); copy(a.tag, '태그를 복사했어요'); }, 'sm')));
   if (a.favorite) card.append(h('span', { class: 'card-fav', html: icon('starFill') }));
   return [card, est + 58];
