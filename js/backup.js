@@ -7,7 +7,7 @@ const extOf = b => {
 };
 const typeOf = p => p.endsWith('.webp') ? 'image/webp' : p.endsWith('.png') ? 'image/png' : 'image/jpeg';
 
-export async function buildBackup({ artists, images, styles, tombstones, folderOrder }) {
+export async function buildBackup({ artists, images, styles, tombstones, folderOrder, tagSections = [], tagItems = [] }) {
   const entries = [];
   const fileOf = (id, suffix, blob) => {
     if (!blob) return null;
@@ -28,6 +28,8 @@ export async function buildBackup({ artists, images, styles, tombstones, folderO
     styles: styles.map(strip),
     tombstones,
     folderOrder,
+    tagSections,
+    tagItems: tagItems.map(strip),
   };
   entries.unshift({ name: 'data.json', data: JSON.stringify(data) });
   return makeZip(entries);
@@ -47,7 +49,7 @@ export async function parseBackup(file) {
     const u = await z.get(prefix + p);
     return u ? new Blob([u], { type: typeOf(p) }) : null;
   };
-  for (const list of [data.artistImages || [], data.styles || []]) {
+  for (const list of [data.artistImages || [], data.styles || [], data.tagItems || []]) {
     for (const r of list) {
       r.thumb = await load(r.thumb);
       r.image = await load(r.image);
@@ -57,5 +59,7 @@ export async function parseBackup(file) {
   data.artistImages ||= [];
   data.styles ||= [];
   data.tombstones ||= [];
+  data.tagSections ||= [];
+  data.tagItems ||= [];
   return data;
 }

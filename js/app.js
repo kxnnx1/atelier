@@ -4,8 +4,9 @@ import { extractArtists, formatTag, displayName, keyOfTag } from './tags.js';
 import { makeImages } from './thumb.js';
 import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
+import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -28,6 +29,8 @@ const S = {
   syncedAt: 0,
   dirtyAt: 0,
   folderOrder: { artists: [], styles: [], updatedAt: 0 },
+  tagSections: [],
+  tagItems: [],
 };
 
 const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -337,8 +340,9 @@ function renderTabs() {
   });
   $('#countArtists').textContent = S.artists.length || '';
   $('#countStyles').textContent = S.styles.length || '';
-  $('#search').placeholder = S.tab === 'artists' ? '작가 태그 · 메모 검색' : '프롬프트 · 제목 · 메모 검색';
-  $('#addLabel').textContent = S.tab === 'artists' ? '작가 등록' : '그림체 추가';
+  $('#countTags').textContent = S.tagItems.length || '';
+  $('#search').placeholder = { artists: '작가 태그 · 메모 검색', styles: '프롬프트 · 제목 · 메모 검색', tags: '태그 · 이름 검색' }[S.tab];
+  $('#addLabel').textContent = { artists: '작가 등록', styles: '그림체 추가', tags: '카드 추가' }[S.tab];
 }
 
 // ---------- 폴더 ----------
@@ -755,15 +759,24 @@ function renderBanner() {
 }
 
 function updateDot() {
-  const has = S.artists.length || S.styles.length;
+  const has = S.artists.length || S.styles.length || S.tagItems.length || S.tagSections.length;
   $('#settingsBtn').classList.toggle('dot', !!has && S.dirtyAt > S.syncedAt);
 }
 
 function renderAll() {
   renderTabs();
-  renderFilters();
-  renderFolders();
-  renderGrid();
+  const tags = S.tab === 'tags';
+  for (const id of ['folders', 'gridHead', 'grid', 'empty']) if (tags) $('#' + id).hidden = true;
+  $('#grid').hidden = tags;
+  if (tags) {
+    tagTab.renderFilters();
+    tagTab.render();
+  } else {
+    tagTab.hide();
+    renderFilters();
+    renderFolders();
+    renderGrid();
+  }
   updateDot();
 }
 let renderT;
@@ -1197,8 +1210,8 @@ async function storageInfo() {
 
 async function settingsView(rerender) {
   const st = await storageInfo();
-  const bytes = [...S.images, ...S.styles].reduce((n, r) => n + (r.thumb?.size || 0) + (r.image?.size || 0), 0);
-  const dirty = S.dirtyAt > S.syncedAt && (S.artists.length || S.styles.length);
+  const bytes = [...S.images, ...S.styles, ...S.tagItems].reduce((n, r) => n + (r.thumb?.size || 0) + (r.image?.size || 0), 0);
+  const dirty = S.dirtyAt > S.syncedAt && (S.artists.length || S.styles.length || S.tagItems.length || S.tagSections.length);
   const exportBtn = btn('download', '백업 파일 만들기', e => doExport(e.currentTarget).then(rerender), 'btn-primary');
   return h('div', { class: 'detail' },
     h('div', { class: 'eyebrow' }, 'Settings'),
@@ -1210,6 +1223,7 @@ async function settingsView(rerender) {
         h('span', {}, '작가 ', h('b', {}, S.artists.length)),
         h('span', {}, '화풍 이미지 ', h('b', {}, S.images.length)),
         h('span', {}, '그림체 ', h('b', {}, S.styles.length)),
+        h('span', {}, '태그 카드 ', h('b', {}, S.tagItems.length)),
         h('span', {}, '예상 크기 ', h('b', {}, fmtBytes(bytes)))),
       h('p', {}, isTouch ? '만든 뒤 공유 시트에서 ‘파일에 저장’ → iCloud Drive를 고르세요.' : '저장 위치로 iCloud Drive를 고르면 아이폰 ‘파일’ 앱에서 바로 보여요.'),
       exportBtn),
@@ -1264,12 +1278,12 @@ async function saveFile(blob, name) {
 }
 
 async function doExport(button) {
-  if (!S.artists.length && !S.styles.length) { toast('내보낼 데이터가 없어요'); return; }
+  if (!S.artists.length && !S.styles.length && !S.tagItems.length && !S.tagSections.length) { toast('내보낼 데이터가 없어요'); return; }
   button.disabled = true;
   const t = toast('백업 파일을 만드는 중…', { sticky: true });
   try {
     const tombstones = await db.all('tombstones');
-    const blob = await buildBackup({ artists: S.artists, images: S.images, styles: S.styles, tombstones, folderOrder: S.folderOrder });
+    const blob = await buildBackup({ artists: S.artists, images: S.images, styles: S.styles, tombstones, folderOrder: S.folderOrder, tagSections: S.tagSections, tagItems: S.tagItems });
     t.close();
     const ok = await saveFile(blob, `atelier-backup-${stamp()}.zip`);
     if (ok) {
@@ -1294,7 +1308,7 @@ async function doImport(file) {
   t.close();
   const mode = await dialog({
     title: '백업을 불러올까요?',
-    text: `작가 ${data.artists.length} · 화풍 이미지 ${data.artistImages.length} · 그림체 ${data.styles.length}\n${fmtDate(data.exportedAt)}에 만든 백업이에요.\n\n전체 교체 — 이 기기의 데이터를 백업 내용으로 바꿔요. (권장)\n합치기 — 양쪽 중 더 최근에 수정된 항목을 남겨요.`,
+    text: `작가 ${data.artists.length} · 화풍 이미지 ${data.artistImages.length} · 그림체 ${data.styles.length} · 태그 ${data.tagItems.length}\n${fmtDate(data.exportedAt)}에 만든 백업이에요.\n\n전체 교체 — 이 기기의 데이터를 백업 내용으로 바꿔요. (권장)\n합치기 — 양쪽 중 더 최근에 수정된 항목을 남겨요.`,
     actions: [{ label: '취소', value: null }, { label: '합치기', value: 'merge' }, { label: '전체 교체', value: 'replace', kind: 'btn-primary' }],
   });
   if (!mode) return;
@@ -1320,8 +1334,8 @@ async function doImport(file) {
 
 // 반환값: 합치기 후 이 기기에만 있는(또는 더 최신인) 항목이 있는지
 async function applyBackup(data, mode) {
-  const stores = ['artists', 'artistImages', 'styles'];
-  const incoming = { artists: data.artists, artistImages: data.artistImages, styles: data.styles };
+  const stores = ['artists', 'artistImages', 'styles', 'tagSections', 'tagItems'];
+  const incoming = { artists: data.artists, artistImages: data.artistImages, styles: data.styles, tagSections: data.tagSections, tagItems: data.tagItems };
   if (mode === 'replace') {
     await db.clear([...stores, 'tombstones']);
     for (const s of stores) await db.putMany(s, incoming[s]);
@@ -1365,8 +1379,8 @@ async function applyBackup(data, mode) {
 }
 
 async function wipeAll() {
-  if (!await confirmDialog('이 기기의 데이터를 모두 지울까요?', '작가, 화풍 이미지, 그림체가 모두 삭제돼요. 백업 파일이 없다면 되돌릴 수 없어요.', '모두 지우기')) return;
-  await db.clear(['artists', 'artistImages', 'styles', 'tombstones']);
+  if (!await confirmDialog('이 기기의 데이터를 모두 지울까요?', '작가, 화풍 이미지, 그림체, 태그가 모두 삭제돼요. 백업 파일이 없다면 되돌릴 수 없어요.', '모두 지우기')) return;
+  await db.clear(['artists', 'artistImages', 'styles', 'tagSections', 'tagItems', 'tombstones']);
   await db.setMeta('folderOrder', { artists: [], styles: [], updatedAt: 0 });
   await reloadState();
   S.syncedAt = S.dirtyAt = 0;
@@ -1379,7 +1393,8 @@ async function wipeAll() {
 async function reloadState() {
   dropAllUrls();
   styleArtCache.clear();
-  [S.artists, S.images, S.styles] = await Promise.all([db.all('artists'), db.all('artistImages'), db.all('styles')]);
+  [S.artists, S.images, S.styles, S.tagSections, S.tagItems] = await Promise.all(
+    ['artists', 'artistImages', 'styles', 'tagSections', 'tagItems'].map(s => db.all(s)));
   const ids = new Set(S.artists.map(a => a.id));
   S.images = S.images.filter(i => ids.has(i.artistId));
   S.folderOrder = await db.getMeta('folderOrder', { artists: [], styles: [], updatedAt: 0 });
@@ -1394,7 +1409,7 @@ function dropContext() {
     const a = S.artists.find(x => x.id === top._artistId);
     if (a) return { label: `‘${displayName(a.tag)}’에 이미지 추가`, sub: '화풍 이미지로 저장돼요', run: fs => addImagesTo(a, fs).then(() => top._refresh?.()) };
   }
-  if (stack.length) return null;
+  if (stack.length || S.tab === 'tags') return null;
   if (S.tab === 'artists') return { label: '새 작가 등록', sub: '이미지에서 작가 태그를 찾아 채워요', run: fs => openNewArtist(fs) };
   return { label: '그림체로 추가', sub: '프롬프트와 UC 프롬프트를 읽어 와요', run: fs => importStyles(fs) };
 }
@@ -1429,6 +1444,14 @@ function setupDrop() {
   });
 }
 
+// ---------- 태그 탭 ----------
+const tagTab = createTagTab({
+  S, h, ib, btn, icon, toast, copy, db, uid, now, markDirty, tomb,
+  promptDialog, confirmDialog, makeLayer, openLayer, closeTop,
+  pickFiles, makeImages, urlOf, dropUrls, isTouch, isImage, persistStorage,
+  renderAll: () => renderAll(),
+});
+
 // ---------- 시작 ----------
 async function init() {
   $('#searchIcon').innerHTML = icon('search');
@@ -1445,8 +1468,12 @@ async function init() {
     window.scrollTo({ top: 0 });
   }));
   let qt;
-  $('#search').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value; renderFolders(); renderGrid(); }, 90); });
-  $('#addBtn').addEventListener('click', () => S.tab === 'artists' ? openNewArtist([]) : pickFiles(importStyles));
+  $('#search').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value; if (S.tab === 'tags') tagTab.render(); else { renderFolders(); renderGrid(); } }, 90); });
+  $('#addBtn').addEventListener('click', () => {
+    if (S.tab === 'artists') openNewArtist([]);
+    else if (S.tab === 'styles') pickFiles(importStyles);
+    else tagTab.addFromHeader();
+  });
   $('#settingsBtn').addEventListener('click', openSettings);
 
   let rt;
@@ -1456,8 +1483,7 @@ async function init() {
     rt = setTimeout(() => {
       if (window.innerWidth === lastW) return;
       lastW = window.innerWidth;
-      renderFolders();
-      renderGrid();
+      if (S.tab !== 'tags') { renderFolders(); renderGrid(); }
     }, 140);
   });
   setupDrop();

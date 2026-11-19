@@ -26,6 +26,7 @@
     <nav class="tabs" role="tablist" aria-label="갤러리">
       <button class="tab" type="button" role="tab" data-tab="artists">작가<span class="count" id="countArtists"></span></button>
       <button class="tab" type="button" role="tab" data-tab="styles">그림체<span class="count" id="countStyles"></span></button>
+      <button class="tab" type="button" role="tab" data-tab="tags">태그<span class="count" id="countTags"></span></button>
     </nav>
     <label class="search">
       <span id="searchIcon" aria-hidden="true"></span>
@@ -45,7 +46,9 @@
     <div class="grid-head" id="gridHead" hidden></div>
     <div class="grid" id="grid"></div>
     <div class="empty" id="empty" hidden></div>
+    <div class="tag-view" id="tagView" hidden></div>
   </main>
+  <div class="tray" id="tray" hidden></div>
 
   <div id="layers"></div>
   <div class="toasts" id="toasts" aria-live="polite"></div>

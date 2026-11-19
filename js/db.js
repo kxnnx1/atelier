@@ -3,15 +3,18 @@ let _db;
 
 export function open() {
   return new Promise((resolve, reject) => {
-    const r = indexedDB.open('atelier', 1);
+    const r = indexedDB.open('atelier', 2);
     r.onupgradeneeded = () => {
       const d = r.result;
-      d.createObjectStore('artists', { keyPath: 'id' });
-      const im = d.createObjectStore('artistImages', { keyPath: 'id' });
-      im.createIndex('artistId', 'artistId');
-      d.createObjectStore('styles', { keyPath: 'id' });
-      d.createObjectStore('tombstones', { keyPath: 'id' });
-      d.createObjectStore('meta', { keyPath: 'key' });
+      const has = n => d.objectStoreNames.contains(n);
+      if (!has('artists')) d.createObjectStore('artists', { keyPath: 'id' });
+      if (!has('artistImages')) d.createObjectStore('artistImages', { keyPath: 'id' }).createIndex('artistId', 'artistId');
+      if (!has('styles')) d.createObjectStore('styles', { keyPath: 'id' });
+      if (!has('tombstones')) d.createObjectStore('tombstones', { keyPath: 'id' });
+      if (!has('meta')) d.createObjectStore('meta', { keyPath: 'key' });
+      // v2: 태그 탭
+      if (!has('tagSections')) d.createObjectStore('tagSections', { keyPath: 'id' });
+      if (!has('tagItems')) d.createObjectStore('tagItems', { keyPath: 'id' });
     };
     r.onsuccess = () => { _db = r.result; resolve(_db); };
     r.onerror = () => reject(r.error);

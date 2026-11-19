@@ -1,5 +1,5 @@
 // 앱 파일을 수정해서 다시 올릴 때는 이 숫자를 올려 주세요.
-const VERSION = 'atelier-v1.2.0';
+const VERSION = 'atelier-v1.3.0';
 const FONTS = 'atelier-fonts';
 const SHELL = [
   './',
@@ -13,6 +13,7 @@ const SHELL = [
   './js/zip.js',
   './js/backup.js',
   './js/icons.js',
+  './js/tagtab.js',
   './fonts/NotoSerifKR-500.woff2',
   './manifest.webmanifest',
   './icons/icon.svg',
