@@ -384,12 +384,31 @@ export function createTagTab(ctx) {
     e.preventDefault();
     const list = row.parentElement;
     row.classList.add('dragging');
+    let frame = 0, px = 0, py = 0;
+    const step = () => {
+      frame = 0;
+      const over = document.elementFromPoint(px, py)?.closest('.trow');
+      // 미끄러지는 중인 줄은 원래 자리에 그려져 있으니 건너뛴다
+      if (!over || over === row || over.parentElement !== list || over.getAnimations().length) return;
+      const r = over.getBoundingClientRect();
+      const before = py < r.top + r.height / 2;
+      if (before ? over.previousElementSibling === row : over.nextElementSibling === row) return;
+      // 줄을 옮기고, 자리가 바뀐 줄들이 부드럽게 미끄러지게 (FLIP)
+      const rows = [...list.querySelectorAll(':scope > .trow')];
+      const was = new Map(rows.map(x => [x, x.getBoundingClientRect().top]));
+      rows.forEach(x => x.getAnimations().forEach(a => a.cancel()));
+      if (before) over.before(row); else over.after(row);
+      for (const x of rows) {
+        if (x === row) continue;
+        const dy = was.get(x) - x.getBoundingClientRect().top;
+        if (Math.abs(dy) > 0.5) x.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { duration: 220, easing: 'cubic-bezier(.22,.8,.24,1)' });
+      }
+    };
     const move = ev => {
       ev.preventDefault();
-      const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.trow');
-      if (!over || over === row || over.parentElement !== list) return;
-      const r = over.getBoundingClientRect();
-      if (ev.clientY < r.top + r.height / 2) over.before(row); else over.after(row);
+      px = ev.clientX;
+      py = ev.clientY;
+      if (!frame) frame = requestAnimationFrame(step);
     };
     const up = async () => {
       window.removeEventListener('pointermove', move);

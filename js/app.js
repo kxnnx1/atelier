@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.6.3';
+const VERSION = '1.6.4';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -526,228 +526,208 @@ function folderCard(f) {
       h('span', { class: 'folder-n' }, `${f.items.length}${unit}`)));
 }
 
-// ---------- 폴더 순서 바꾸기 (마우스: 끌기, 터치: 길게 누른 뒤 끌기) ----------
-let fdrag = null;
+// ---------- 끌어서 순서 바꾸기 공통 ----------
+// 마우스: 6px 이상 움직이면 시작 / 터치: 0.38초 길게 누른 뒤 끌기
 let suppressClickUntil = 0;
-const sliding = new Set();
+const sliding = new Map();   // 미끄러지는 중인 요소 → 애니메이션
 
-function folderDragStart(e) {
-  const card = e.target.closest('.folder-card[data-folder]');
-  if (!card || (e.pointerType === 'mouse' && e.button !== 0)) return;
-  const grid = card.parentElement;
-  fdrag = { card, grid, id: e.pointerId, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, touch: e.pointerType !== 'mouse', active: false, timer: 0, raf: 0 };
-  if (fdrag.touch) fdrag.timer = setTimeout(() => fdrag && activateDrag(), 380);
-  window.addEventListener('pointermove', folderDragMove, { passive: false });
-  window.addEventListener('pointerup', folderDragEnd);
-  window.addEventListener('pointercancel', folderDragEnd);
+// 요소들을 옮긴 뒤 원래 자리에서 새 자리로 부드럽게 미끄러지게 한다 (FLIP)
+function flipMove(els, mutate) {
+  const before = new Map(els.map(c => [c, c.getBoundingClientRect()]));   // 진행 중인 움직임까지 포함한 현재 위치
+  els.forEach(c => c.getAnimations().forEach(a => a.cancel()));
+  mutate();
+  for (const c of els) {
+    const a = before.get(c), b = c.getBoundingClientRect();
+    const dx = a.left - b.left, dy = a.top - b.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+    const anim = c.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }], { duration: 260, easing: 'cubic-bezier(.22,.8,.24,1)' });
+    sliding.set(c, anim);
+    anim.onfinish = anim.oncancel = () => { if (sliding.get(c) === anim) sliding.delete(c); };
+  }
 }
 
-function activateDrag() {
-  const d = fdrag;
-  const r = d.card.getBoundingClientRect();
-  d.active = true;
-  d.dx = d.x - r.left;
-  d.dy = d.y - r.top;
-  d.ghost = d.card.cloneNode(true);
-  d.ghost.classList.add('folder-ghost');
-  Object.assign(d.ghost.style, { width: r.width + 'px', height: r.height + 'px', left: '0px', top: '0px' });
-  document.body.append(d.ghost);
-  d.card.classList.add('drag-src');
-  document.documentElement.classList.add('folder-dragging');
-  positionGhost();
-  navigator.vibrate?.(12);
-  const tick = () => {
-    if (!fdrag?.active) return;
-    const edge = 70;
-    if (d.y < edge) window.scrollBy(0, -Math.ceil((edge - d.y) / 6));
-    else if (d.y > innerHeight - edge) window.scrollBy(0, Math.ceil((d.y - innerHeight + edge) / 6));
+// 끌기 세션 하나. opts: { el, container, ghostParentClass, ghostClass, scale, findOver, reorder, done }
+function startDragSession(e, opts) {
+  const d = {
+    ...opts, pid: e.pointerId, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY,
+    touch: e.pointerType !== 'mouse', active: false, timer: 0, raf: 0, frame: 0,
+  };
+  // 잡은 지점을 기억해 두면, 시작하는 순간 카드가 포인터에서 떨어지지 않는다
+  const r0 = opts.getEl()?.getBoundingClientRect();
+  if (r0) { d.dx = d.x0 - r0.left; d.dy = d.y0 - r0.top; d.w0 = r0.width; d.h0 = r0.height; }
+  const activate = () => {
+    if (d.active || d.ended) return;
+    d.before?.();
+    const el = d.getEl();
+    if (!el) { end(); return; }
+    const r = el.getBoundingClientRect();
+    d.active = true;
+    if (d.dx == null) { d.dx = d.x - r.left; d.dy = d.y - r.top; }
+    const ghost = el.cloneNode(true);
+    ghost.classList.add(d.ghostClass);
+    ghost.classList.remove('drag-src');
+    Object.assign(ghost.style, { width: r.width + 'px', height: r.height + 'px' });
+    d.ghost = ghost;
+    d.ghostWrap = h('div', { class: (d.ghostParentClass?.() || '') + ' ghost-wrap' }, ghost);
+    document.body.append(d.ghostWrap);
+    el.classList.add('drag-src');
+    document.documentElement.classList.add('folder-dragging');
+    place();
+    navigator.vibrate?.(12);
+    const tick = () => {
+      if (!d.active) return;
+      const edge = 70;
+      if (d.y < edge) window.scrollBy(0, -Math.ceil((edge - d.y) / 6));
+      else if (d.y > innerHeight - edge) window.scrollBy(0, Math.ceil((d.y - innerHeight + edge) / 6));
+      d.raf = requestAnimationFrame(tick);
+    };
     d.raf = requestAnimationFrame(tick);
   };
-  d.raf = requestAnimationFrame(tick);
+  const place = () => { d.ghost.style.transform = `translate3d(${d.x - d.dx}px, ${d.y - d.dy}px, 0) scale(${d.scale || 1.03})`; };
+  // 화면 갱신 한 번에 한 번만 처리해서 끊김 없이 따라오게 한다
+  const frame = () => {
+    d.frame = 0;
+    if (!d.active) return;
+    place();
+    const over = d.findOver(d.x, d.y);
+    if (over && over !== d.getEl() && !sliding.has(over)) d.reorder(over, d);
+  };
+  const move = ev => {
+    if (ev.pointerId !== d.pid) return;
+    d.x = ev.clientX;
+    d.y = ev.clientY;
+    if (!d.active) {
+      const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
+      if (d.touch) { if (moved > 10) end(); return; }   // 길게 누르기 전에 움직이면 스크롤로 본다
+      if (moved <= 6) return;
+      activate();
+      if (!d.active) return;
+    }
+    ev.preventDefault();
+    if (!d.frame) d.frame = requestAnimationFrame(frame);
+  };
+  const end = () => {
+    if (d.ended) return;
+    d.ended = true;
+    clearTimeout(d.timer);
+    cancelAnimationFrame(d.frame);
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    current = null;
+    if (!d.active) return;
+    d.active = false;
+    cancelAnimationFrame(d.raf);
+    suppressClickUntil = Date.now() + 500;
+    document.documentElement.classList.remove('folder-dragging');
+    const el = d.getEl();
+    const g = d.ghost, gw = d.ghostWrap;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      g.classList.add('settling');
+      g.style.transform = `translate3d(${r.left}px, ${r.top}px, 0) scale(1)`;
+    }
+    setTimeout(() => { gw.remove(); d.getEl()?.classList.remove('drag-src'); }, 240);
+    d.done(d);
+  };
+  current = d;
+  if (d.touch) d.timer = setTimeout(activate, 380);
+  window.addEventListener('pointermove', move, { passive: false });
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+  return d;
 }
+let current = null;
 
-function positionGhost() {
-  const d = fdrag;
-  d.ghost.style.transform = `translate(${d.x - d.dx}px, ${d.y - d.dy}px) scale(1.04)`;
-}
-
-function folderDragMove(e) {
-  const d = fdrag;
-  if (!d || e.pointerId !== d.id) return;
-  d.x = e.clientX;
-  d.y = e.clientY;
-  const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
-  if (!d.active) {
-    if (d.touch) { if (moved > 10) folderDragEnd(); return; }   // 길게 누르기 전에 움직이면 스크롤로 본다
-    if (moved <= 6) return;
-    activateDrag();
-  }
-  e.preventDefault();
-  positionGhost();
-  const over = document.elementFromPoint(d.x, d.y)?.closest('.folder-card[data-folder]');
-  if (!over || over === d.card || over.parentElement !== d.grid || sliding.has(over)) return;
-  const cards = [...d.grid.querySelectorAll('.folder-card[data-folder]')];
-  const from = cards.indexOf(d.card), to = cards.indexOf(over);
-  const before = new Map(cards.map(c => [c, c.getBoundingClientRect()]));
-  if (from < to) over.after(d.card); else over.before(d.card);
-  // 자리를 옮긴 카드들이 부드럽게 미끄러지도록 (FLIP)
-  for (const c of cards) {
-    const a = before.get(c), b = c.getBoundingClientRect();
-    const tx = a.left - b.left, ty = a.top - b.top;
-    if (!tx && !ty) continue;
-    // 미끄러지는 중인 카드는 원래 자리에 그려져 있으므로, 끝날 때까지 교체 대상으로 보지 않는다
-    sliding.add(c);
-    c.animate([{ transform: `translate(${tx}px, ${ty}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' })
-      .finished.finally(() => sliding.delete(c));
-  }
-}
-
-function folderDragEnd() {
-  const d = fdrag;
-  if (!d) return;
-  fdrag = null;
-  clearTimeout(d.timer);
-  window.removeEventListener('pointermove', folderDragMove);
-  window.removeEventListener('pointerup', folderDragEnd);
-  window.removeEventListener('pointercancel', folderDragEnd);
-  if (!d.active) return;
-  cancelAnimationFrame(d.raf);
-  suppressClickUntil = Date.now() + 500;
-  const r = d.card.getBoundingClientRect();
-  const g = d.ghost;
-  g.style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s';
-  g.style.transform = `translate(${r.left}px, ${r.top}px)`;
-  setTimeout(() => { g.remove(); d.card.classList.remove('drag-src'); }, 230);
-  document.documentElement.classList.remove('folder-dragging');
-  const names = [...d.grid.querySelectorAll('.folder-card[data-folder]')].map(c => c.dataset.folder);
-  const prev = folderList().map(f => f.name).filter(n => !isSpecial(n));
-  if (names.join('\u0000') !== prev.join('\u0000')) saveFolderOrder(names);
-}
-
-// 끌기를 마친 직후의 클릭은 폴더 열기로 처리하지 않는다
+// 끌기를 마친 직후의 클릭은 폴더/항목 열기로 처리하지 않는다
 document.addEventListener('click', e => {
   if (Date.now() < suppressClickUntil && e.target.closest?.('.folder-card, #grid .card')) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 // 끄는 중에는 화면이 같이 스크롤되지 않게 한다 (iOS)
-document.addEventListener('touchmove', e => { if (fdrag?.active || idrag?.active) e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', e => { if (current?.active) e.preventDefault(); }, { passive: false });
 document.addEventListener('contextmenu', e => { if (S.label && e.target.closest?.('#grid .card')) e.preventDefault(); });
 
-// ---------- 폴더 안 항목 순서 바꾸기 ----------
-let idrag = null;
+// ---------- 폴더 카드 순서 ----------
+function folderDragStart(e) {
+  const card = e.target.closest('.folder-card[data-folder]');
+  if (!card || current || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const grid = card.parentElement;
+  startDragSession(e, {
+    getEl: () => card,
+    ghostClass: 'folder-ghost',
+    scale: 1.04,
+    findOver: (x, y) => {
+      const over = document.elementFromPoint(x, y)?.closest('.folder-card[data-folder]');
+      return over && over.parentElement === grid ? over : null;
+    },
+    reorder: over => {
+      const cards = [...grid.querySelectorAll('.folder-card[data-folder]')];
+      const from = cards.indexOf(card), to = cards.indexOf(over);
+      flipMove(cards, () => { if (from < to) over.after(card); else over.before(card); });
+    },
+    done: () => {
+      const names = [...grid.querySelectorAll('.folder-card[data-folder]')].map(c => c.dataset.folder);
+      const prev = folderList().map(f => f.name).filter(n => !isSpecial(n));
+      if (names.join('\u0000') !== prev.join('\u0000')) saveFolderOrder(names);
+    },
+  });
+}
+
+// ---------- 폴더 안 항목 순서 ----------
 const gridCard = id => document.querySelector(`#grid .card[data-id="${CSS.escape(id)}"]`);
 
+// 지금 있는 카드 요소를 그대로 새 순서로 다시 배치한다 (새로 그리지 않아서 이미지가 깜빡이지 않음)
+function relayoutCards(order) {
+  const grid = $('#grid');
+  const els = new Map([...grid.querySelectorAll('.card[data-id]')].map(c => [c.dataset.id, c]));
+  const list = order.map(id => els.get(id)).filter(Boolean);
+  flipMove(list, () => {
+    const cols = [...grid.querySelectorAll(':scope > .col')];
+    if (!cols.length) { list.forEach(c => grid.append(c)); return; }
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 16;
+    const heights = cols.map(() => 0);
+    for (const c of list) {
+      const k = heights.indexOf(Math.min(...heights));
+      cols[k].append(c);
+      heights[k] += (parseFloat(c.dataset.est) || c.offsetHeight) + gap;   // 처음 배치와 같은 기준으로 계산
+    }
+  });
+}
+
 function itemDragStart(e) {
-  if (!S.label || S.q.trim() || S.fav || S.tab === 'tags') return;
+  if (!S.label || S.q.trim() || S.fav || S.tab === 'tags' || current) return;
   const card = e.target.closest('#grid .card[data-id]');
   if (!card || e.target.closest('button') || (e.pointerType === 'mouse' && e.button !== 0)) return;
-  idrag = { id: card.dataset.id, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pid: e.pointerId, touch: e.pointerType !== 'mouse', active: false, timer: 0, lock: 0, raf: 0 };
-  if (idrag.touch) idrag.timer = setTimeout(() => idrag && itemActivate(), 380);
-  window.addEventListener('pointermove', itemDragMove, { passive: false });
-  window.addEventListener('pointerup', itemDragEnd);
-  window.addEventListener('pointercancel', itemDragEnd);
-}
-
-function itemActivate() {
-  const d = idrag;
-  // 다른 정렬로 보고 있었다면 지금 보이는 순서를 그대로 '직접 순서'로 삼는다
-  d.order = visibleItems().map(it => it.id);
-  S.itemOrder = { ...S.itemOrder, [S.tab]: { ...(S.itemOrder[S.tab] || {}), [S.label]: d.order } };
-  if ((S.folderSort[S.tab] || 'manual') !== 'manual') {
-    S.folderSort = { ...S.folderSort, [S.tab]: 'manual' };
-    ls.set('folderSort', S.folderSort);
-    renderFilters();
-    renderGrid();
-  }
-  const card = gridCard(d.id);
-  if (!card) { idrag = null; return; }
-  const r = card.getBoundingClientRect();
-  d.active = true;
-  d.dx = d.x - r.left;
-  d.dy = d.y - r.top;
-  d.ghost = card.cloneNode(true);
-  d.ghost.classList.add('card-ghost');
-  Object.assign(d.ghost.style, { width: r.width + 'px', height: r.height + 'px' });
-  // 격자의 배열 클래스(작게/제목만)를 그대로 받도록 감싸서 붙인다
-  d.ghostWrap = h('div', { class: $('#grid').className + ' ghost-wrap' }, d.ghost);
-  document.body.append(d.ghostWrap);
-  card.classList.add('drag-src');
-  document.documentElement.classList.add('folder-dragging');
-  placeItemGhost();
-  const tick = () => {
-    if (!idrag?.active) return;
-    const edge = 70;
-    if (d.y < edge) window.scrollBy(0, -Math.ceil((edge - d.y) / 6));
-    else if (d.y > innerHeight - edge) window.scrollBy(0, Math.ceil((d.y - innerHeight + edge) / 6));
-    d.raf = requestAnimationFrame(tick);
-  };
-  d.raf = requestAnimationFrame(tick);
-}
-
-function placeItemGhost() {
-  const d = idrag;
-  d.ghost.style.transform = `translate(${d.x - d.dx}px, ${d.y - d.dy}px) scale(1.03)`;
-}
-
-function itemDragMove(e) {
-  const d = idrag;
-  if (!d || e.pointerId !== d.pid) return;
-  d.x = e.clientX;
-  d.y = e.clientY;
-  if (!d.active) {
-    const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
-    if (d.touch) { if (moved > 10) itemDragEnd(); return; }
-    if (moved <= 6) return;
-    itemActivate();
-    if (!idrag?.active) return;
-  }
-  e.preventDefault();
-  placeItemGhost();
-  if (Date.now() < d.lock) return;
-  // 크기가 다른 카드끼리 바뀐 직후 포인터 아래에 다른 카드가 와서 되돌아가는 것을 막는다
-  if (d.sx != null && Math.hypot(d.x - d.sx, d.y - d.sy) < 28) return;
-  const over = document.elementFromPoint(d.x, d.y)?.closest('#grid .card[data-id]');
-  if (!over || over.dataset.id === d.id) return;
-  const from = d.order.indexOf(d.id), to = d.order.indexOf(over.dataset.id);
-  if (from < 0 || to < 0) return;
-  d.order.splice(from, 1);
-  d.order.splice(to, 0, d.id);
-  S.itemOrder[S.tab][S.label] = d.order;
-  // 다시 배치하고, 자리를 옮긴 카드들이 미끄러지게 (FLIP)
-  const before = new Map([...document.querySelectorAll('#grid .card[data-id]')].map(c => [c.dataset.id, c.getBoundingClientRect()]));
-  renderGrid();
-  for (const c of document.querySelectorAll('#grid .card[data-id]')) {
-    if (c.dataset.id === d.id) { c.classList.add('drag-src'); continue; }
-    const a = before.get(c.dataset.id), b = c.getBoundingClientRect();
-    if (!a) continue;
-    const tx = a.left - b.left, ty = a.top - b.top;
-    if (tx || ty) c.animate([{ transform: `translate(${tx}px, ${ty}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
-  }
-  d.lock = Date.now() + 230;
-  d.sx = d.x;
-  d.sy = d.y;
-}
-
-function itemDragEnd() {
-  const d = idrag;
-  if (!d) return;
-  idrag = null;
-  clearTimeout(d.timer);
-  window.removeEventListener('pointermove', itemDragMove);
-  window.removeEventListener('pointerup', itemDragEnd);
-  window.removeEventListener('pointercancel', itemDragEnd);
-  if (!d.active) return;
-  cancelAnimationFrame(d.raf);
-  suppressClickUntil = Date.now() + 500;
-  document.documentElement.classList.remove('folder-dragging');
-  const card = gridCard(d.id);
-  const g = d.ghost, gw = d.ghostWrap;
-  if (card) {
-    const r = card.getBoundingClientRect();
-    g.style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1)';
-    g.style.transform = `translate(${r.left}px, ${r.top}px)`;
-  }
-  setTimeout(() => { gw.remove(); gridCard(d.id)?.classList.remove('drag-src'); }, 230);
-  saveItemOrder(S.label, d.order);
+  const id = card.dataset.id;
+  let order = [];
+  startDragSession(e, {
+    getEl: () => gridCard(id),
+    ghostClass: 'card-ghost',
+    ghostParentClass: () => $('#grid').className,
+    before: () => {
+      // 다른 정렬로 보고 있었다면 지금 보이는 순서를 그대로 '직접 순서'로 삼는다
+      order = visibleItems().map(it => it.id);
+      S.itemOrder = { ...S.itemOrder, [S.tab]: { ...(S.itemOrder[S.tab] || {}), [S.label]: order } };
+      if ((S.folderSort[S.tab] || 'manual') !== 'manual') {
+        S.folderSort = { ...S.folderSort, [S.tab]: 'manual' };
+        ls.set('folderSort', S.folderSort);
+        renderFilters();
+        renderGrid();
+      }
+      // 옮겨진 카드가 '떠오르기' 효과를 다시 재생하지 않게 (다음에 새로 그릴 때까지 유지)
+      $('#grid').classList.add('static');
+    },
+    findOver: (x, y) => document.elementFromPoint(x, y)?.closest('#grid .card[data-id]') || null,
+    reorder: over => {
+      const from = order.indexOf(id), to = order.indexOf(over.dataset.id);
+      if (from < 0 || to < 0) return;
+      order.splice(from, 1);
+      order.splice(to, 0, id);
+      S.itemOrder[S.tab][S.label] = order;
+      relayoutCards(order);
+    },
+    done: () => saveItemOrder(S.label, order),
+  });
 }
 // 길게 눌렀을 때 뜨는 메뉴 막기
 document.addEventListener('contextmenu', e => { if (e.target.closest?.('.folder-card[data-folder]')) e.preventDefault(); });
@@ -925,6 +905,7 @@ function renderGrid() {
   const heights = new Array(n).fill(0);
   for (const it of items) {
     const [el, est] = S.tab === 'artists' ? artistCard(it, colW) : styleCard(it, colW);
+    el.dataset.est = est;
     const k = heights.indexOf(Math.min(...heights));
     cols[k].append(el);
     heights[k] += est + gap;
