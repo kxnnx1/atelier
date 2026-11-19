@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -343,7 +343,10 @@ function renderTabs() {
   $('#countStyles').textContent = S.styles.length || '';
   $('#countTags').textContent = S.tagItems.length || '';
   $('#search').placeholder = { artists: '작가 태그 · 메모 검색', styles: '프롬프트 · 제목 · 메모 검색', tags: '태그 · 이름 검색' }[S.tab];
-  $('#addLabel').textContent = { artists: '작가 등록', styles: '그림체 추가', tags: '카드 추가' }[S.tab];
+  const addLabel = { artists: '작가 등록', styles: '그림체 추가', tags: '카드 추가' }[S.tab];
+  $('#addLabel').textContent = addLabel;
+  $('#addBtn').title = addLabel;
+  $('#addBtn').setAttribute('aria-label', addLabel);
 }
 
 // ---------- 폴더 ----------

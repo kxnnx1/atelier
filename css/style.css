@@ -112,6 +112,9 @@ svg { display: block; }
 .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font-size: 14px; color: var(--ink); }
 .search input::-webkit-search-cancel-button { opacity: .5; }
 
+.add-btn { width: 38px; padding: 0; }
+.add-btn .i svg { width: 18px; height: 18px; }
+.add-btn #addLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .actions { grid-area: actions; display: flex; align-items: center; gap: 6px; padding-bottom: 12px; }
 
 /* ---------- buttons ---------- */
@@ -842,8 +845,6 @@ body.has-tray .toasts { bottom: calc(126px + var(--safe-b)); }
   .brand-mark { font-size: 22px; }
   .brand-sub { display: none; }
   .actions { padding-bottom: 0; }
-  .add-btn { width: 38px; padding: 0; }
-  .add-btn #addLabel { display: none; }
   .tabs { gap: 22px; }
   .tab { padding-bottom: 12px; }
   .search { width: 100%; height: 36px; margin-bottom: 8px; }
