@@ -6,7 +6,7 @@ import { buildBackup, parseBackup } from './backup.js';
 import { icon } from './icons.js';
 import { createTagTab } from './tagtab.js';
 
-const VERSION = '1.6.4';
+const VERSION = '1.7.0';
 const $ = (s, r = document) => r.querySelector(s);
 const now = () => Date.now();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : now().toString(36) + Math.random().toString(36).slice(2, 12));
@@ -574,11 +574,16 @@ function startDragSession(e, opts) {
     document.documentElement.classList.add('folder-dragging');
     place();
     navigator.vibrate?.(12);
+    // 화면 아래 고정된 트레이가 있으면 그 위부터 자동 스크롤을 시작한다
+    const tray = document.querySelector('#tray:not([hidden])');
+    const bottomInset = tray ? tray.offsetHeight : 0;
+    const top = (document.querySelector('.top')?.offsetHeight || 0);
     const tick = () => {
       if (!d.active) return;
       const edge = 70;
-      if (d.y < edge) window.scrollBy(0, -Math.ceil((edge - d.y) / 6));
-      else if (d.y > innerHeight - edge) window.scrollBy(0, Math.ceil((d.y - innerHeight + edge) / 6));
+      const low = innerHeight - bottomInset - edge;
+      if (d.y < top + edge) window.scrollBy(0, -Math.ceil((top + edge - d.y) / 6));
+      else if (d.y > low) window.scrollBy(0, Math.ceil((d.y - low) / 6));
       d.raf = requestAnimationFrame(tick);
     };
     d.raf = requestAnimationFrame(tick);
@@ -638,10 +643,11 @@ function startDragSession(e, opts) {
   return d;
 }
 let current = null;
+const isDragging = () => !!current;
 
 // 끌기를 마친 직후의 클릭은 폴더/항목 열기로 처리하지 않는다
 document.addEventListener('click', e => {
-  if (Date.now() < suppressClickUntil && e.target.closest?.('.folder-card, #grid .card')) { e.preventDefault(); e.stopPropagation(); }
+  if (Date.now() < suppressClickUntil && e.target.closest?.('.folder-card, #grid .card, .tcard')) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 // 끄는 중에는 화면이 같이 스크롤되지 않게 한다 (iOS)
 document.addEventListener('touchmove', e => { if (current?.active) e.preventDefault(); }, { passive: false });
@@ -1675,6 +1681,7 @@ const tagTab = createTagTab({
   S, h, ib, btn, icon, toast, copy, db, uid, now, markDirty, tomb,
   promptDialog, confirmDialog, makeLayer, openLayer, closeTop,
   pickFiles, makeImages, urlOf, dropUrls, isTouch, isImage, persistStorage,
+  startDragSession, flipMove, isDragging,
   renderAll: () => renderAll(),
 });
 

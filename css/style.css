@@ -270,11 +270,15 @@ svg { display: block; }
 .folder-card img { -webkit-user-drag: none; pointer-events: none; }
 .folder-card.drag-src { opacity: .28; box-shadow: none; transform: none; outline: 1.5px dashed var(--ink-4); outline-offset: -1.5px; }
 /* 끌리는 카드는 포인터를 바로 따라오게 (카드의 전환 효과를 물려받지 않음) */
-.card-ghost, .folder-ghost { will-change: transform; }
-.card-ghost:not(.settling), .folder-ghost:not(.settling) { transition: none !important; animation: none !important; }
-.card-ghost.settling, .folder-ghost.settling { transition: transform .24s cubic-bezier(.22, .8, .24, 1), box-shadow .24s !important; box-shadow: var(--sh-1); }
+.card-ghost, .folder-ghost, .tcard-ghost { will-change: transform; }
+.card-ghost:not(.settling), .folder-ghost:not(.settling), .tcard-ghost:not(.settling) { transition: none !important; animation: none !important; }
+.card-ghost.settling, .folder-ghost.settling, .tcard-ghost.settling { transition: transform .24s cubic-bezier(.22, .8, .24, 1), box-shadow .24s !important; box-shadow: var(--sh-1); }
 /* 끄는 동안에는 지나가는 카드가 떠오르지 않게 */
-html.folder-dragging .card, html.folder-dragging .folder-card { transition: none !important; }
+html.folder-dragging .card, html.folder-dragging .folder-card, html.folder-dragging .tcard { transition: none !important; }
+html.folder-dragging .tcard:hover, html.folder-dragging .tcard:active { transform: none; box-shadow: var(--sh-1); }
+html.folder-dragging .tcard-add { opacity: 0 !important; }
+.tcard.tcard-ghost { position: fixed; left: 0; top: 0; z-index: 95; margin: 0; pointer-events: none; box-shadow: 0 18px 44px rgba(27, 26, 24, .22); transform-origin: 0 0; }
+.tcard.drag-src { opacity: .28; box-shadow: none; transform: none; outline: 1.5px dashed var(--ink-4); outline-offset: -1.5px; }
 html.folder-dragging .card:hover, html.folder-dragging .folder-card:hover { transform: none; box-shadow: var(--sh-1); }
 html.folder-dragging .card:hover .card-media img { transform: none; }
 .card.card-ghost { position: fixed; left: 0; top: 0; z-index: 95; margin: 0; pointer-events: none; box-shadow: 0 18px 44px rgba(27, 26, 24, .22); transform-origin: 0 0; animation: none; }

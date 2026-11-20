@@ -56,11 +56,11 @@ export function createTagTab(ctx) {
 
   // ---------- 누르기 (클릭 / 우클릭 / 길게 누르기) ----------
   // tap: 클릭·탭, secondary: 우클릭·길게 누르기
-  function attachPress(el, { tap, secondary }) {
+  function attachPress(el, { tap, secondary, touchHold = true }) {
     let timer = 0, fired = false, touch = false, sx = 0, sy = 0, skipUntil = 0;
     el.addEventListener('pointerdown', e => {
       touch = e.pointerType !== 'mouse';
-      if (!touch || !secondary) return;
+      if (!touch || !secondary || !touchHold) return;
       fired = false;
       sx = e.clientX; sy = e.clientY;
       clearTimeout(timer);
@@ -223,7 +223,7 @@ export function createTagTab(ctx) {
     const vn = (it.variants || []).filter(v => v.tag || v.name).length;
     const on = (it.options || []).filter(o => o.tag || o.name).length;
     const name = label(it);
-    const el = h('div', { class: 'tcard' + (isSet ? ' is-set' : ''), role: 'button', tabindex: 0, 'aria-label': name },
+    const el = h('div', { class: 'tcard' + (isSet ? ' is-set' : ''), role: 'button', tabindex: 0, 'aria-label': name, 'data-id': it.id },
       h('div', { class: 'tcard-media' },
         it.thumb
           ? h('img', { src: urlOf(it, 'thumb'), alt: '', draggable: 'false', loading: 'lazy' })
@@ -244,9 +244,72 @@ export function createTagTab(ctx) {
         else toast('태그가 비어 있어요. 편집 모드에서 태그를 입력하세요.');
       },
       secondary: !isSet && vn ? pt => openVariants(it, pt) : null,
+      touchHold: false,   // 터치로 길게 누르기는 끌기에서 처리 (움직이지 않고 떼면 변형 메뉴)
     });
     return el;
   }
+
+  // ---------- 실사용 모드: 카드 끌어서 순서 바꾸기 ----------
+  // 마우스: 끌기 / 터치: 길게 누른 채 끌기 (움직이지 않고 떼면 변형 태그 메뉴)
+  // 다른 구역의 카드 위로 가져가면 그 구역으로 옮겨진다
+  function cardDragStart(e) {
+    if (T.mode !== 'use' || S.q.trim() || ctx.isDragging()) return;
+    const card = e.target.closest('#tagView .tcard[data-id]');
+    if (!card || e.target.closest('button') || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const it = S.tagItems.find(x => x.id === card.dataset.id);
+    if (!it) return;
+    closePop();
+    ctx.startDragSession(e, {
+      getEl: () => card,
+      ghostClass: 'tcard-ghost',
+      scale: 1.05,
+      findOver: (x, y) => document.elementFromPoint(x, y)?.closest('#tagView .tcard[data-id]') || null,
+      reorder: over => {
+        const all = [...document.querySelectorAll('#tagView .tcard[data-id]')];
+        ctx.flipMove(all, () => {
+          if (over.parentElement === card.parentElement) {
+            const sib = [...card.parentElement.children];
+            if (sib.indexOf(card) < sib.indexOf(over)) over.after(card); else over.before(card);
+          } else over.before(card);
+        });
+      },
+      done: d => {
+        const moved = Math.hypot(d.x - d.x0, d.y - d.y0);
+        if (d.touch && moved < 12) {
+          // 길게 눌렀다 뗀 것 → 변형 태그 메뉴
+          const vn = (it.variants || []).filter(v => v.tag || v.name).length;
+          if (it.type === 'card' && vn) setTimeout(() => openVariants(it, { clientX: d.x, clientY: d.y }), 60);
+          return;
+        }
+        saveCardOrder();
+      },
+    });
+  }
+
+  async function saveCardOrder() {
+    const t = now(), changed = [];
+    let moved = false;
+    for (const grid of document.querySelectorAll('#tagView .tgrid')) {
+      const sid = grid.dataset.sec || null;
+      [...grid.querySelectorAll(':scope > .tcard[data-id]')].forEach((c, i) => {
+        const it = S.tagItems.find(x => x.id === c.dataset.id);
+        if (!it) return;
+        if (secId(it) !== sid) moved = true;
+        if (it.order !== i + 1 || secId(it) !== sid) {
+          it.order = i + 1;
+          it.sectionId = sid;
+          it.updatedAt = t;
+          changed.push(it);
+        }
+      });
+    }
+    if (!changed.length) return;
+    await db.putMany('tagItems', changed);
+    markDirty();
+    // 구역을 옮겼으면 구역별 개수를 다시 그린다 (내려앉는 움직임이 끝난 뒤)
+    if (moved) setTimeout(() => { if (!ctx.isDragging()) render(); }, 280);
+  }
+  document.getElementById('tagView').addEventListener('pointerdown', cardDragStart);
 
   function renderUse(root) {
     const q = S.q.trim().toLowerCase();
@@ -270,7 +333,7 @@ export function createTagTab(ctx) {
           h('h2', {}, g.sec ? g.sec.name : '미분류'),
           h('span', { class: 'n' }, items.length || '')) : null,
         items.length
-          ? h('div', { class: 'tgrid' }, items.map(cardEl))
+          ? h('div', { class: 'tgrid', 'data-sec': g.sec ? g.sec.id : '' }, items.map(cardEl))
           : h('p', { class: 'tblock-empty' }, '비어 있는 구역이에요')));
     }
     if (q && !shown) root.append(h('div', { class: 'empty' }, h('h2', {}, '찾는 태그가 없어요'), h('p', {}, '다른 검색어를 입력해 보세요.')));
@@ -554,6 +617,7 @@ export function createTagTab(ctx) {
     $('#filters').replaceChildren(...[
       h('div', { class: 'chips' }, seg),
       T.mode === 'edit' ? btn('folderPlus', '구역 추가', addSection, 'btn-ghost sm') : null,
+      T.mode === 'use' && S.tagItems.length > 1 ? h('span', { class: 'block-hint' }, isTouch ? '길게 눌러 끌면 순서 바꾸기' : '끌어서 순서 바꾸기') : null,
     ].filter(Boolean));
   }
 
